@@ -7,6 +7,7 @@ single writer task drains to the transport. Logging goes to stderr.
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import typing
@@ -14,8 +15,10 @@ import typing
 import aiojobs
 
 from nn_mcp_types import jsonrpc, lifecycle
+from nn_mcp_types import tools as tool_types
 from nn_mcp_types.wire import to_wire
 
+from nn_mcp_stdio import errors, tools
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
 log = logging.getLogger("nn_mcp_stdio")
@@ -24,8 +27,10 @@ log = logging.getLogger("nn_mcp_stdio")
 class Server:
     """An MCP server. Register handlers, then `await server.run()`.
 
-    `initialize` is answered from `name`/`version`/`capabilities`; register the
-    rest with `@server.request(method)` and `@server.notification(method)`.
+    `initialize` is answered from `name`/`version`/`capabilities`. Expose tools
+    with `@server.tool` (annotated `async def`s -- `tools/list` and a strictly
+    validated `tools/call` are built in), and register any other method with
+    `@server.request(method)` or `@server.notification(method)`.
     """
 
     def __init__(
@@ -41,7 +46,12 @@ class Server:
         )
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
-        self._request_handlers = {lifecycle.INITIALIZE: self._initialize}
+        self._tools = {}
+        self._request_handlers = {
+            lifecycle.INITIALIZE: self._initialize,
+            tool_types.TOOLS_LIST: self._list_tools,
+            tool_types.TOOLS_CALL: self._call_tool,
+        }
         self._notification_handlers = {}
 
     def request(self, method: str) -> typing.Callable:
@@ -62,12 +72,64 @@ class Server:
 
         return register
 
+    def tool(
+        self,
+        function: typing.Callable | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        strict_arguments: bool = True,
+    ) -> typing.Callable:
+        """Register an `async def` handler as a tool.
+
+        Usable bare (`@server.tool`) or with options
+        (`@server.tool(name=..., strict_arguments=...)`). The `inputSchema` is
+        derived from the handler's annotations; the docstring is the tool
+        description. `strict_arguments` (default `True`) rejects unknown
+        arguments.
+        """
+
+        def register(handler):
+            built = tools.build_tool(
+                handler,
+                name=name,
+                description=description,
+                strict_arguments=strict_arguments,
+            )
+            self._tools[built.definition.name] = built
+            return handler
+
+        if function is not None:  # bare @server.tool
+            return register(function)
+        return register  # @server.tool(...)
+
     async def _initialize(self, params):
         return lifecycle.InitializeResult(
             protocol_version=lifecycle.PROTOCOL_VERSION,
-            capabilities=self._capabilities,
+            capabilities=self._effective_capabilities(),
             server_info=self._implementation,
         )
+
+    def _effective_capabilities(self):
+        # Registering tools advertises the `tools` capability, unless the caller
+        # already declared one of their own.
+        if self._tools and self._capabilities.tools is None:
+            return dataclasses.replace(
+                self._capabilities, tools=lifecycle.ToolsCapability()
+            )
+        return self._capabilities
+
+    async def _list_tools(self, params):
+        return tool_types.ListToolsResult(
+            tools=[tool.definition for tool in self._tools.values()]
+        )
+
+    async def _call_tool(self, params):
+        params = params or {}
+        tool = self._tools.get(params.get("name"))
+        if tool is None:
+            raise errors.invalid_params(f"unknown tool: {params.get('name')!r}")
+        return await tool.call(params.get("arguments"))
 
     async def run(self, transport: Transport | None = None) -> None:
         transport = transport or StdioTransport()
@@ -127,6 +189,11 @@ class Server:
             return
         try:
             result = await handler(message.get("params"))
+        except errors.RequestError as error:
+            await outbox.put(
+                self._failure(message["id"], error.code, error.message)
+            )
+            return
         except Exception:
             log.exception("request handler %r failed", method)
             await outbox.put(
