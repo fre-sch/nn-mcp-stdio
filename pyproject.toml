@@ -1,0 +1,33 @@
+[build-system]
+requires = ["flit_core>=3.9,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "nn-mcp-stdio"
+authors = [
+    { name = "Frederik Schumacher" },
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# version and description are read from src/nn_mcp_stdio/__init__.py
+# (__version__ and the module docstring) by flit.
+dynamic = ["version", "description"]
+# The sibling MCP types (editable path install for now, `pip install -e
+# ../nn-mcp-types`) and the aiojobs background-task scheduler (see wiki decision
+# stdio-server-concurrency).
+dependencies = ["nn-mcp-types", "aiojobs>=1.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = ["black>=24"]
+
+[tool.flit.module]
+# Distribution name is nn-mcp-stdio; import name is nn_mcp_stdio under src/.
+name = "nn_mcp_stdio"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 80
