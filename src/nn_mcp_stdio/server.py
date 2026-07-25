@@ -9,13 +9,14 @@ single writer task drains to the transport. Logging goes to stderr.
 import asyncio
 import json
 import logging
+import typing
 
 import aiojobs
 
 from nn_mcp_types import jsonrpc, lifecycle
 from nn_mcp_types.wire import to_wire
 
-from nn_mcp_stdio.transport import StdioTransport
+from nn_mcp_stdio.transport import StdioTransport, Transport
 
 log = logging.getLogger("nn_mcp_stdio")
 
@@ -27,7 +28,14 @@ class Server:
     rest with `@server.request(method)` and `@server.notification(method)`.
     """
 
-    def __init__(self, name, version, capabilities=None, *, limit=100):
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        capabilities: lifecycle.ServerCapabilities | None = None,
+        *,
+        limit: int = 100,
+    ) -> None:
         self._implementation = lifecycle.Implementation(
             name=name, version=version
         )
@@ -36,7 +44,7 @@ class Server:
         self._request_handlers = {lifecycle.INITIALIZE: self._initialize}
         self._notification_handlers = {}
 
-    def request(self, method):
+    def request(self, method: str) -> typing.Callable:
         """Register a coroutine `handler(params) -> result` for a method."""
 
         def register(handler):
@@ -45,7 +53,7 @@ class Server:
 
         return register
 
-    def notification(self, method):
+    def notification(self, method: str) -> typing.Callable:
         """Register a coroutine `handler(params) -> None` for a notification."""
 
         def register(handler):
@@ -61,7 +69,7 @@ class Server:
             server_info=self._implementation,
         )
 
-    async def run(self, transport=None):
+    async def run(self, transport: Transport | None = None) -> None:
         transport = transport or StdioTransport()
         outbox = asyncio.Queue()
         writer = asyncio.create_task(self._write_outbox(transport, outbox))
