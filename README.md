@@ -166,8 +166,7 @@ The handler's return is mapped to a `CallToolResult`:
 - `None` -> empty content.
 
 Returning anything else (a bare `int`, `dict`, or dataclass) raises `TypeError`
-today -- structured output (`structuredContent` / `outputSchema`) is not
-implemented yet.
+-- unless the tool opts into structured output (below).
 
 ```python
 from nn_mcp_types import content, tools
@@ -184,6 +183,36 @@ async def report(kind: str) -> tools.CallToolResult:
         content=[content.TextContent(text=f"report: {kind}")]
     )
 ```
+
+### Structured output
+
+Opt in with `structured_content=True`. The return (a dataclass or `dict`) becomes
+the result's `structuredContent`, and a dataclass return annotation derives the
+tool's `outputSchema`:
+
+```python
+import dataclasses
+
+
+@dataclasses.dataclass
+class Stats:
+    count: int
+    ok: bool
+
+
+@server.tool(structured_content=True)
+async def stats() -> Stats:
+    """Report stats."""
+    return Stats(count=3, ok=True)
+```
+
+`tools/call` then returns `{"content": [], "structuredContent": {"count": 3,
+"ok": true}}`. The `content` array is left **empty** -- the spec's backward-compat
+"serialize the JSON into a `TextContent` too" is only a SHOULD, and mirroring it
+by default is wasteful for clients that read `structuredContent`. If you do need
+the mirror (for an older client), return a `CallToolResult` yourself with both
+`content` and `structured_content` set. A `-> dict` return is structured too, but
+declares no `outputSchema`.
 
 ### Errors
 
