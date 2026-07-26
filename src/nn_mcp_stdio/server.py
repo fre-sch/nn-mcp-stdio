@@ -16,10 +16,11 @@ import aiojobs
 
 from nn_mcp_types import jsonrpc, lifecycle
 from nn_mcp_types import logging as mcp_logging
+from nn_mcp_types import resources as resource_types
 from nn_mcp_types import tools as tool_types
 from nn_mcp_types.wire import from_wire, to_wire
 
-from nn_mcp_stdio import errors, tools
+from nn_mcp_stdio import errors, resources, tools
 from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
@@ -49,6 +50,7 @@ class Server:
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
         self._tools = {}
+        self._resources = {}  # uri -> registered Resource
         self._client = None  # the peer's Implementation, captured at initialize
         self._log_level = None  # last logging/setLevel; filtering deferred
         self._outbox = None  # the outbound queue, live for the run() loop
@@ -59,6 +61,8 @@ class Server:
             mcp_logging.LOGGING_SET_LEVEL: self._set_level,
             tool_types.TOOLS_LIST: self._list_tools,
             tool_types.TOOLS_CALL: self._call_tool,
+            resource_types.RESOURCES_LIST: self._list_resources,
+            resource_types.RESOURCES_READ: self._read_resource,
         }
         self._notification_handlers = {}
 
@@ -116,6 +120,40 @@ class Server:
             return register(function)
         return register  # @server.tool(...)
 
+    def resource(
+        self,
+        uri: str,
+        *,
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        mime_type: str | None = None,
+    ) -> typing.Callable:
+        """Register an `async def` reader as a readable resource.
+
+        The resource is identified -- and read -- by `uri`; a resource takes no
+        arguments (search is a tool, not a resource). `name` defaults to the
+        reader's name, `description` to its docstring. The reader returns the
+        contents: a `str`/`bytes` is wrapped, filling `uri`/`mimeType` from here;
+        a `*ResourceContents` (or list) or `ReadResourceResult` is used as-is. It
+        may declare a `Context` parameter. Registering a resource advertises the
+        `resources` capability at `initialize`.
+        """
+
+        def register(reader):
+            built = resources.build_resource(
+                reader,
+                uri,
+                name=name,
+                title=title,
+                description=description,
+                mime_type=mime_type,
+            )
+            self._resources[built.definition.uri] = built
+            return reader
+
+        return register
+
     async def _initialize(self, params):
         params = params or {}
         client = params.get("clientInfo")
@@ -136,6 +174,8 @@ class Server:
             changes["logging"] = {}
         if self._tools and self._capabilities.tools is None:
             changes["tools"] = lifecycle.ToolsCapability()
+        if self._resources and self._capabilities.resources is None:
+            changes["resources"] = lifecycle.ResourcesCapability()
         if changes:
             return dataclasses.replace(self._capabilities, **changes)
         return self._capabilities
@@ -157,6 +197,21 @@ class Server:
         if tool is None:
             raise errors.invalid_params(f"unknown tool: {params.get('name')!r}")
         return await tool.call(params.get("arguments"), context)
+
+    async def _list_resources(self, params):
+        return resource_types.ListResourcesResult(
+            resources=[
+                resource.definition for resource in self._resources.values()
+            ]
+        )
+
+    async def _read_resource(self, params, context: Context):
+        params = params or {}
+        uri = params.get("uri")
+        resource = self._resources.get(uri)
+        if resource is None:
+            raise errors.resource_not_found(uri)
+        return await resource.read(context)
 
     async def run(self, transport: Transport | None = None) -> None:
         transport = transport or StdioTransport()

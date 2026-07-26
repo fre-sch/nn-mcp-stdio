@@ -274,6 +274,50 @@ they never interleave. All `Context` methods are `async`.
 > Server-initiated *requests* (sampling, elicitation, roots) are a later phase;
 > `Context` will grow `sample`/`elicit`/`list_roots` then.
 
+## Resources
+
+A resource is *identity*: a stable URI and a reader that returns its contents.
+Unlike a tool it takes no arguments -- there is nothing to validate, and no
+query. (Searching a collection is a *tool*, not a resource; see the wiki
+specification `mcp-resources-identity-vs-query`.) Register one with
+`@server.resource(uri, ...)`:
+
+```python
+import json
+
+from nn_mcp_stdio import Server
+
+server = Server(name="lib", version="0.1.0")
+
+
+@server.resource("file:///config.json", mime_type="application/json")
+async def config() -> str:
+    """The service configuration."""
+    return json.dumps({"debug": True})
+```
+
+`config` is listed by `resources/list` (its `name` defaults to the function name,
+`description` to the docstring) and read by `resources/read` for
+`file:///config.json`. The reader's return is mapped to a `ReadResourceResult`,
+filling `uri`/`mimeType` from the registration:
+
+- `str` -> a single `TextResourceContents`,
+- `bytes` -> a single `BlobResourceContents` (base64-encoded),
+- a `TextResourceContents`/`BlobResourceContents` or a `list` of them
+  (`nn_mcp_types.content`) -> used as the contents (full control -- e.g. a
+  differing per-part `uri`),
+- a `ReadResourceResult` (`nn_mcp_types.resources`) -> used as-is,
+- anything else -> `TypeError`.
+
+Reading an unregistered URI answers with JSON-RPC `-32002` ("Resource not
+found") -- the reader is never reached. Registering any resource advertises the
+`resources` capability at `initialize`. A reader may declare a `Context`
+parameter, injected like any other handler's.
+
+> Static resources only for now. URI templates
+> (`resources/templates/list`), `subscribe`/`unsubscribe`, and the
+> `updated`/`list_changed` notifications are a later slice.
+
 ## Other handlers
 
 Beyond tools, register any method or notification directly (a `Context`
