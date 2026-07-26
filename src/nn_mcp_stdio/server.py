@@ -15,10 +15,12 @@ import typing
 import aiojobs
 
 from nn_mcp_types import jsonrpc, lifecycle
+from nn_mcp_types import logging as mcp_logging
 from nn_mcp_types import tools as tool_types
-from nn_mcp_types.wire import to_wire
+from nn_mcp_types.wire import from_wire, to_wire
 
 from nn_mcp_stdio import errors, tools
+from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
 log = logging.getLogger("nn_mcp_stdio")
@@ -47,8 +49,14 @@ class Server:
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
         self._tools = {}
+        self._client = None  # the peer's Implementation, captured at initialize
+        self._log_level = None  # last logging/setLevel; filtering deferred
+        self._outbox = None  # the outbound queue, live for the run() loop
+        # handler -> its Context parameter name (detected once, then cached)
+        self._context_names = {}
         self._request_handlers = {
             lifecycle.INITIALIZE: self._initialize,
+            mcp_logging.LOGGING_SET_LEVEL: self._set_level,
             tool_types.TOOLS_LIST: self._list_tools,
             tool_types.TOOLS_CALL: self._call_tool,
         }
@@ -104,6 +112,10 @@ class Server:
         return register  # @server.tool(...)
 
     async def _initialize(self, params):
+        params = params or {}
+        client = params.get("clientInfo")
+        if client is not None:
+            self._client = from_wire(lifecycle.Implementation, client)
         return lifecycle.InitializeResult(
             protocol_version=lifecycle.PROTOCOL_VERSION,
             capabilities=self._effective_capabilities(),
@@ -111,29 +123,40 @@ class Server:
         )
 
     def _effective_capabilities(self):
-        # Registering tools advertises the `tools` capability, unless the caller
-        # already declared one of their own.
+        # Handlers can always log through Context, so advertise `logging`;
+        # registering tools advertises `tools`. Either yields to a capability
+        # the caller declared themselves.
+        changes = {}
+        if self._capabilities.logging is None:
+            changes["logging"] = {}
         if self._tools and self._capabilities.tools is None:
-            return dataclasses.replace(
-                self._capabilities, tools=lifecycle.ToolsCapability()
-            )
+            changes["tools"] = lifecycle.ToolsCapability()
+        if changes:
+            return dataclasses.replace(self._capabilities, **changes)
         return self._capabilities
+
+    async def _set_level(self, params):
+        # Accept the client's minimum level and acknowledge. Filtering by it is
+        # deferred (see wiki decision context-object); we store it for later.
+        self._log_level = (params or {}).get("level")
+        return {}
 
     async def _list_tools(self, params):
         return tool_types.ListToolsResult(
             tools=[tool.definition for tool in self._tools.values()]
         )
 
-    async def _call_tool(self, params):
+    async def _call_tool(self, params, context: Context):
         params = params or {}
         tool = self._tools.get(params.get("name"))
         if tool is None:
             raise errors.invalid_params(f"unknown tool: {params.get('name')!r}")
-        return await tool.call(params.get("arguments"))
+        return await tool.call(params.get("arguments"), context)
 
     async def run(self, transport: Transport | None = None) -> None:
         transport = transport or StdioTransport()
         outbox = asyncio.Queue()
+        self._outbox = outbox  # reachable from Context for the loop's lifetime
         writer = asyncio.create_task(self._write_outbox(transport, outbox))
         scheduler = aiojobs.Scheduler(
             limit=self._limit, exception_handler=self._on_job_error
@@ -187,8 +210,9 @@ class Server:
                 )
             )
             return
+        context = self._make_context(message["id"], message.get("params"))
         try:
-            result = await handler(message.get("params"))
+            result = await self._invoke(handler, message.get("params"), context)
         except errors.RequestError as error:
             await outbox.put(
                 self._failure(message["id"], error.code, error.message)
@@ -211,10 +235,36 @@ class Server:
         if handler is None:
             log.debug("no handler for notification %r", message["method"])
             return
+        context = self._make_context(None, message.get("params"))
         try:
-            await handler(message.get("params"))
+            await self._invoke(handler, message.get("params"), context)
         except Exception:
             log.exception("notification handler %r failed", message["method"])
+
+    async def _invoke(self, handler, params, context):
+        # Call the handler with `params`, plus the Context injected under the
+        # name the handler chose for it (if any).
+        name = self._context_name(handler)
+        if name is None:
+            return await handler(params)
+        return await handler(params, **{name: context})
+
+    def _context_name(self, handler):
+        if handler not in self._context_names:
+            self._context_names[handler] = context_parameter(handler)
+        return self._context_names[handler]
+
+    def _make_context(self, request_id, params):
+        token = None
+        if isinstance(params, dict) and isinstance(params.get("_meta"), dict):
+            token = params["_meta"].get("progressToken")
+        return Context(
+            request_id=request_id,
+            client=self._client,
+            progress_token=token,
+            outbox=self._outbox,
+            encode=self._encode,
+        )
 
     async def _write_outbox(self, transport, outbox):
         while True:
