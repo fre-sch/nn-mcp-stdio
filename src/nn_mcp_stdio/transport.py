@@ -3,8 +3,7 @@
 `read_line`/`write_line` deal in whole lines of text -- one JSON message each;
 JSON (de)serialisation is the server's concern. `StdioTransport` does blocking
 readline/write in a thread executor, so it works cross-platform (including
-Windows, where asyncio has no console-pipe transport). See wiki
-mcp-stdio-transport.
+Windows, where asyncio has no console-pipe transport).
 """
 
 import asyncio

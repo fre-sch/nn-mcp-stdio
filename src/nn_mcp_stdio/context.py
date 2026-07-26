@@ -4,10 +4,10 @@ A handler that declares a parameter annotated `Context` (any name) is handed one
 by the server. Through it the handler talks back to the client mid-call:
 logging (`notifications/message`) and progress (`notifications/progress`). Those
 notifications are enqueued on the server's single outbound queue -- no second
-writer (see wiki decision stdio-server-concurrency).
+writer.
 
 The server->client *request* back-channel (sampling, elicitation, roots) is a
-later phase; see wiki decision context-object.
+later phase.
 """
 
 import typing

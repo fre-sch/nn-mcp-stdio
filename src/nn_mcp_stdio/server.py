@@ -1,7 +1,7 @@
 """The stdio MCP server: register handler functions, run the transport loop.
 
-Pipeline (see wiki stdio-server-concurrency): one reader parses each line and
-dispatches by message shape; an aiojobs Scheduler runs handlers concurrently
+Pipeline: one reader parses each line and dispatches by message shape; an
+aiojobs Scheduler runs handlers concurrently
 and in isolation; handlers enqueue their replies onto an outbound queue that a
 single writer task drains to the transport. Logging goes to stderr.
 """
@@ -182,7 +182,7 @@ class Server:
 
     async def _set_level(self, params):
         # Accept the client's minimum level and acknowledge. Filtering by it is
-        # deferred (see wiki decision context-object); we store it for later.
+        # deferred; we store it for later.
         self._log_level = (params or {}).get("level")
         return {}
 

@@ -32,8 +32,8 @@ Runtime dependencies: `nn-mcp-types` (MCP dataclasses + schema generation),
 
 ## Implementation overview
 
-The server is a small asyncio pipeline (see the wiki decision
-`stdio-server-concurrency`): a single **reader** parses each stdin line and
+The server is a small asyncio pipeline: a single **reader** parses each stdin
+line and
 dispatches by message shape; an `aiojobs` **scheduler** runs handlers
 concurrently and in isolation; each handler enqueues its reply on an outbound
 queue that a single **writer** drains to stdout. Logging goes to stderr, so it
@@ -278,8 +278,7 @@ they never interleave. All `Context` methods are `async`.
 
 A resource is *identity*: a stable URI and a reader that returns its contents.
 Unlike a tool it takes no arguments -- there is nothing to validate, and no
-query. (Searching a collection is a *tool*, not a resource; see the wiki
-specification `mcp-resources-identity-vs-query`.) Register one with
+query. (Searching a collection is a *tool*, not a resource.) Register one with
 `@server.resource(uri, ...)`:
 
 ```python

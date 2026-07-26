@@ -6,8 +6,6 @@ synthesises a dataclass from its signature (fields = parameters, defaults and
 from it. `Tool.call` validates an arguments dict against that schema -- strictly,
 no coercion -- reconstructs the typed values, and invokes the handler with
 natural keyword arguments. The handler's return is mapped to a `CallToolResult`.
-
-See wiki discussion adding-tools and decision stdio-tool-definition-and-validation.
 """
 
 import dataclasses

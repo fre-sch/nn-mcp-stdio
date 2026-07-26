@@ -1,9 +1,9 @@
 """Turn an async reader function into a readable MCP resource.
 
-A resource is *identity*: a stable URI and a reader producing its contents (see
-wiki decision stdio-resource-definition and specification
-mcp-resources-identity-vs-query). Unlike a tool it takes no arguments -- there is
-nothing to validate on the way in. `build_resource` wraps an `async def` reader
+A resource is *identity*: a stable URI and a reader producing its contents.
+Unlike a tool it takes no arguments -- there is nothing to validate on the way
+in (searching a collection is a *tool*, not a resource). `build_resource` wraps
+an `async def` reader
 with the resource's wire definition; `Resource.read` runs the reader and maps its
 return to a `ReadResourceResult`, filling `uri`/`mimeType` from the registration
 so the reader repeats neither.
