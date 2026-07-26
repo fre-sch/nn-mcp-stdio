@@ -87,6 +87,7 @@ class Server:
         name: str | None = None,
         description: str | None = None,
         strict_arguments: bool = True,
+        structured_content: bool = False,
     ) -> typing.Callable:
         """Register an `async def` handler as a tool.
 
@@ -94,7 +95,10 @@ class Server:
         (`@server.tool(name=..., strict_arguments=...)`). The `inputSchema` is
         derived from the handler's annotations; the docstring is the tool
         description. `strict_arguments` (default `True`) rejects unknown
-        arguments.
+        arguments. `structured_content` (default `False`) opts the tool into
+        structured output: its return (a dataclass/`dict`) becomes
+        `structuredContent`, and a dataclass return annotation derives the
+        `outputSchema`.
         """
 
         def register(handler):
@@ -103,6 +107,7 @@ class Server:
                 name=name,
                 description=description,
                 strict_arguments=strict_arguments,
+                structured_content=structured_content,
             )
             self._tools[built.definition.name] = built
             return handler
