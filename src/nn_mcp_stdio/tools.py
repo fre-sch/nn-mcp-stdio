@@ -21,7 +21,7 @@ from jsonschema.validators import Draft202012Validator
 from nn_mcp_types import content
 from nn_mcp_types import tools as tool_types
 from nn_mcp_types.schema import SchemaAnnotation, get_schema
-from nn_mcp_types.wire import from_wire
+from nn_mcp_types.wire import from_wire, to_wire
 
 from nn_mcp_stdio import errors
 from nn_mcp_stdio.context import Context, context_parameter
@@ -41,6 +41,7 @@ class Tool:
     arguments: type
     validator: Draft202012Validator
     context_parameter: str | None = None
+    structured_content: bool = False
 
     async def call(
         self, arguments: dict | None, context: Context | None = None
@@ -62,7 +63,7 @@ class Tool:
         except Exception as exception:
             log.exception("tool %r failed", self.definition.name)
             return _error_result(str(exception))
-        return _as_call_result(result)
+        return _as_call_result(result, self.structured_content)
 
 
 def build_tool(
@@ -71,6 +72,7 @@ def build_tool(
     name: str | None = None,
     description: str | None = None,
     strict_arguments: bool = True,
+    structured_content: bool = False,
 ) -> Tool:
     """Build a `Tool` from an `async def` handler (see module docstring)."""
     if not inspect.iscoroutinefunction(handler):
@@ -85,6 +87,7 @@ def build_tool(
         name=name or handler.__name__,
         input_schema=input_schema,
         description=description or inspect.getdoc(handler),
+        output_schema=_output_schema(handler) if structured_content else None,
     )
     return Tool(
         definition=definition,
@@ -92,7 +95,25 @@ def build_tool(
         arguments=arguments,
         validator=Draft202012Validator(input_schema),
         context_parameter=context_name,
+        structured_content=structured_content,
     )
+
+
+def _output_schema(handler):
+    # Derive an outputSchema from the return annotation when it is a dataclass;
+    # a non-dataclass return (e.g. `dict`) is structured but self-describing.
+    return_hint = _strip_annotated(
+        typing.get_type_hints(handler, include_extras=True).get("return")
+    )
+    if dataclasses.is_dataclass(return_hint) and isinstance(return_hint, type):
+        return get_schema(return_hint)
+    return None
+
+
+def _strip_annotated(hint):
+    if typing.get_origin(hint) is typing.Annotated:
+        return typing.get_args(hint)[0]
+    return hint
 
 
 def _synthesise_arguments(handler, strict_arguments, context_name):
@@ -130,9 +151,11 @@ def _closed_object_config():
     )
 
 
-def _as_call_result(result):
+def _as_call_result(result, structured):
     if isinstance(result, tool_types.CallToolResult):
-        return result
+        return result  # full control (may carry both content and structured)
+    if structured:
+        return _structured_result(result)
     if result is None:
         return tool_types.CallToolResult(content=[])
     if isinstance(result, str):
@@ -147,8 +170,26 @@ def _as_call_result(result):
         return tool_types.CallToolResult(content=list(result))
     raise TypeError(
         f"unsupported tool return {type(result).__name__!r}: return a str, "
-        "content block(s), or a CallToolResult "
-        "(structured output is not supported yet)"
+        "content block(s), or a CallToolResult (or set structured_content=True "
+        "and return a dataclass/dict)"
+    )
+
+
+def _structured_result(result):
+    # A structured tool returns an object -> structuredContent; content stays
+    # empty (no wasteful backward-compat text mirror -- a handler wanting it
+    # returns a CallToolResult with both fields).
+    if result is None:
+        return tool_types.CallToolResult(content=[])
+    if isinstance(result, dict) or (
+        dataclasses.is_dataclass(result) and not isinstance(result, type)
+    ):
+        return tool_types.CallToolResult(
+            content=[], structured_content=to_wire(result)
+        )
+    raise TypeError(
+        f"structured_content tool returned {type(result).__name__!r}: return a "
+        "dataclass, a dict, or a CallToolResult"
     )
 
 
