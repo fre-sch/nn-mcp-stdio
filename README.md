@@ -206,9 +206,49 @@ async def divide(a: int, b: int) -> str:
     return str(a // b)
 ```
 
+## Context (logging and progress)
+
+A handler -- a tool, or a raw `@server.request`/`@server.notification` -- can
+declare a parameter annotated `Context` (any name). The server injects the live
+connection for that call; the parameter never appears in a tool's `inputSchema`.
+
+```python
+from nn_mcp_stdio import Context, Server
+
+server = Server(name="jobs", version="0.1.0")
+
+
+@server.tool()
+async def crunch(rows: int, ctx: Context) -> str:
+    """Crunch `rows` rows, reporting progress."""
+    await ctx.info(f"starting {rows} rows", logger="crunch")
+    for done in range(rows):
+        await ctx.report_progress(done + 1, total=rows)
+    return "done"
+```
+
+Through `Context` a handler talks back to the client mid-call:
+
+- **Logging** -> `notifications/message`: `ctx.log(level, data, *, logger=None)`
+  for the full RFC-5424 level set, with `ctx.debug`/`info`/`warning`/`error`
+  shorthands. The server declares the `logging` capability.
+- **Progress** -> `notifications/progress`:
+  `ctx.report_progress(progress, total=None, message=None)`. It is a **no-op
+  unless the request carried a `progressToken`** (in `params._meta`) -- the
+  client opts into progress.
+- **Metadata**: `ctx.request_id` (the in-flight request id) and `ctx.client`
+  (the client's `Implementation`, captured at `initialize`).
+
+Notifications are enqueued on the same single outbound stream as replies, so
+they never interleave. All `Context` methods are `async`.
+
+> Server-initiated *requests* (sampling, elicitation, roots) are a later phase;
+> `Context` will grow `sample`/`elicit`/`list_roots` then.
+
 ## Other handlers
 
-Beyond tools, register any method or notification directly:
+Beyond tools, register any method or notification directly (a `Context`
+parameter is injected here too):
 
 ```python
 @server.request("ping")
