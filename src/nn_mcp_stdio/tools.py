@@ -24,6 +24,7 @@ from nn_mcp_types.schema import SchemaAnnotation, get_schema
 from nn_mcp_types.wire import from_wire
 
 from nn_mcp_stdio import errors
+from nn_mcp_stdio.context import Context, context_parameter
 
 log = logging.getLogger("nn_mcp_stdio")
 
@@ -39,8 +40,11 @@ class Tool:
     handler: typing.Callable
     arguments: type
     validator: Draft202012Validator
+    context_parameter: str | None = None
 
-    async def call(self, arguments: dict | None) -> tool_types.CallToolResult:
+    async def call(
+        self, arguments: dict | None, context: Context | None = None
+    ) -> tool_types.CallToolResult:
         """Validate `arguments`, reconstruct them, and run the handler."""
         arguments = arguments or {}
         invalid = best_match(self.validator.iter_errors(arguments))
@@ -51,6 +55,8 @@ class Tool:
             field.name: getattr(typed, field.name)
             for field in dataclasses.fields(typed)
         }
+        if self.context_parameter is not None:
+            keyword_arguments[self.context_parameter] = context
         try:
             result = await self.handler(**keyword_arguments)
         except Exception as exception:
@@ -71,7 +77,8 @@ def build_tool(
         raise TypeError(
             f"tool handler {handler.__name__!r} must be `async def`"
         )
-    arguments = _synthesise_arguments(handler, strict_arguments)
+    context_name = context_parameter(handler)
+    arguments = _synthesise_arguments(handler, strict_arguments, context_name)
     input_schema = get_schema(arguments)
     Draft202012Validator.check_schema(input_schema)
     definition = tool_types.Tool(
@@ -84,13 +91,16 @@ def build_tool(
         handler=handler,
         arguments=arguments,
         validator=Draft202012Validator(input_schema),
+        context_parameter=context_name,
     )
 
 
-def _synthesise_arguments(handler, strict_arguments):
+def _synthesise_arguments(handler, strict_arguments, context_name):
     hints = typing.get_type_hints(handler, include_extras=True)
     fields = []
     for parameter in inspect.signature(handler).parameters.values():
+        if parameter.name == context_name:
+            continue  # injected by the server, not a wire argument
         annotation = hints.get(parameter.name, typing.Any)
         if parameter.default is inspect.Parameter.empty:
             fields.append((parameter.name, annotation))
