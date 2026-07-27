@@ -8,6 +8,8 @@ import pytest
 from nn_mcp_stdio import Context, Server
 from nn_mcp_stdio.transport import MemoryTransport
 from nn_mcp_types import content
+from nn_mcp_types import resources as resource_types
+from nn_mcp_types.content import BlobResourceContents, TextResourceContents
 
 
 def encode(obj):
@@ -162,5 +164,139 @@ async def test_bad_return_is_a_type_error():
         return 42
 
     built = server._resources["num:///bad"]
+    with pytest.raises(TypeError):
+        await built.read()
+
+
+# -- static resources: add_resource_from_literal ---------------------------
+
+
+def definition(uri, **fields):
+    return resource_types.Resource(uri=uri, name="static", **fields)
+
+
+async def test_literal_str_is_listed_verbatim_and_read_as_text():
+    server = Server(name="lib", version="0.1.0")
+    server.add_resource_from_literal(
+        definition(
+            "file:///notes.md",
+            title="Notes",
+            mime_type="text/markdown",
+        ),
+        "# hello",
+    )
+
+    listed = await run(server, [request("resources/list", request_id=1)])
+    (resource,) = listed[0]["result"]["resources"]
+    assert resource["title"] == "Notes"  # full definition, verbatim
+    assert resource["mimeType"] == "text/markdown"
+
+    out = await run(server, [read("file:///notes.md")])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents == {
+        "uri": "file:///notes.md",
+        "text": "# hello",
+        "mimeType": "text/markdown",
+    }
+
+
+async def test_literal_bytes_is_read_as_base64_blob():
+    server = Server(name="lib", version="0.1.0")
+    server.add_resource_from_literal(
+        definition("bin:///logo", mime_type="image/png"), b"\x89PNG\r\n"
+    )
+
+    out = await run(server, [read("bin:///logo")])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents["blob"] == base64.b64encode(b"\x89PNG\r\n").decode("ascii")
+    assert contents["mimeType"] == "image/png"
+
+
+def test_literal_rejects_a_non_str_bytes_content():
+    server = Server(name="lib", version="0.1.0")
+    with pytest.raises(TypeError):
+        server.add_resource_from_literal(definition("num:///bad"), 42)
+
+
+# -- static resources: add_resource_from_path ------------------------------
+
+
+async def test_path_without_a_classifier_is_a_blob(tmp_path):
+    server = Server(name="lib", version="0.1.0")
+    file = tmp_path / "data.bin"
+    file.write_bytes(b"\x00\x01\x02")
+    server.add_resource_from_path(
+        definition("file:///data.bin", mime_type="application/octet-stream"),
+        file,
+    )
+
+    out = await run(server, [read("file:///data.bin")])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents["blob"] == base64.b64encode(b"\x00\x01\x02").decode("ascii")
+    assert contents["mimeType"] == "application/octet-stream"
+
+
+async def test_path_classifier_sets_type_and_mime(tmp_path):
+    server = Server(name="lib", version="0.1.0")
+    file = tmp_path / "config.json"
+    file.write_text('{"debug": true}', encoding="utf-8")
+
+    def describe(path, data):
+        return "application/json", TextResourceContents
+
+    server.add_resource_from_path(
+        # definition advertises nothing; the classifier fills the read type
+        definition("file:///config.json"),
+        file,
+        describe_contents=describe,
+    )
+
+    listed = await run(server, [request("resources/list", request_id=1)])
+    (resource,) = listed[0]["result"]["resources"]
+    assert (
+        "mimeType" not in resource
+    )  # the listing hint stays as defined (none)
+
+    out = await run(server, [read("file:///config.json")])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents == {
+        "uri": "file:///config.json",
+        "text": '{"debug": true}',
+        "mimeType": "application/json",
+    }
+
+
+async def test_path_is_read_lazily_on_each_read(tmp_path):
+    server = Server(name="lib", version="0.1.0")
+    file = tmp_path / "live.txt"
+    file.write_text("first", encoding="utf-8")
+    server.add_resource_from_path(
+        definition("file:///live.txt"),
+        file,
+        describe_contents=lambda path, data: (
+            "text/plain",
+            TextResourceContents,
+        ),
+    )
+
+    first = await run(server, [read("file:///live.txt")])
+    assert first[0]["result"]["contents"][0]["text"] == "first"
+
+    file.write_text("second", encoding="utf-8")  # changes between reads
+    second = await run(server, [read("file:///live.txt")])
+    assert second[0]["result"]["contents"][0]["text"] == "second"
+
+
+async def test_path_classifier_bad_block_type_is_a_type_error(tmp_path):
+    server = Server(name="lib", version="0.1.0")
+    file = tmp_path / "x.dat"
+    file.write_bytes(b"x")
+    server.add_resource_from_path(
+        definition("file:///x.dat"),
+        file,
+        describe_contents=lambda path, data: ("text/plain", str),
+    )
+
+    built = server._resources["file:///x.dat"]
     with pytest.raises(TypeError):
         await built.read()

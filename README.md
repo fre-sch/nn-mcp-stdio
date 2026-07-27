@@ -313,6 +313,51 @@ found") -- the reader is never reached. Registering any resource advertises the
 `resources` capability at `initialize`. A reader may declare a `Context`
 parameter, injected like any other handler's.
 
+### Fixed resources (no reader)
+
+When the contents are *fixed* -- a literal, or a file on disk -- there is no
+logic to carry, so writing a reader per resource is just noise (and a decorator
+in a loop closes over the loop variable, serving the wrong content). Register
+them directly instead, passing the full `nn_mcp_types.resources.Resource` as the
+definition (so you never re-spell its fields) plus the payload:
+
+```python
+import pathlib
+
+from nn_mcp_types import resources
+from nn_mcp_types.content import TextResourceContents
+
+# A literal: `str` -> text, `bytes` -> base64 blob.
+server.add_resource_from_literal(
+    resources.Resource(
+        uri="file:///config.json",
+        name="config",
+        title="The service configuration",
+        mime_type="application/json",
+    ),
+    '{"debug": true}',
+)
+
+# A file, read lazily on every read. `describe_contents(path, data)` classifies
+# the bytes -- returning `(mime_type, block_type)` -- so the framework need not
+# guess from the (unreliable) file name.
+server.add_resource_from_path(
+    resources.Resource(uri="file:///README.md", name="readme"),
+    pathlib.Path("README.md"),
+    describe_contents=lambda path, data: ("text/markdown", TextResourceContents),
+)
+```
+
+The `definition` is listed by `resources/list` verbatim (its `mime_type` is the
+advertised *hint*), and read by `definition.uri`. For a file, `describe_contents`
+runs lazily on each read -- so a content-sniffing classifier gets the actual
+bytes, and an edited file is reflected on the next read -- and its
+`(mime_type, block_type)` overrides `definition.mime_type` for the served
+content. Without a classifier the file is served as a base64
+`BlobResourceContents` typed by `definition.mime_type`; a file classified as
+`TextResourceContents` is decoded as UTF-8. A non-`str`/`bytes` literal, or a
+`block_type` that is neither contents class, raises `TypeError`.
+
 > Static resources only for now. URI templates
 > (`resources/templates/list`), `subscribe`/`unsubscribe`, and the
 > `updated`/`list_changed` notifications are a later slice.

@@ -13,6 +13,7 @@ import base64
 import dataclasses
 import inspect
 import logging
+import pathlib
 import typing
 
 from nn_mcp_types import resources as resource_types
@@ -111,4 +112,78 @@ def build_resource(
         definition=definition,
         reader=reader,
         context_parameter=context_parameter(reader),
+    )
+
+
+# A classifier for a file's bytes: given the path and the read data, name the
+# MIME type and the contents block class (text or blob) the content maps to.
+DescribeContents = typing.Callable[
+    [pathlib.Path, bytes],
+    tuple[str, type[TextResourceContents | BlobResourceContents]],
+]
+
+
+def build_literal_resource(
+    definition: resource_types.Resource,
+    content: str | bytes,
+) -> Resource:
+    """Build a static resource whose contents are a fixed literal.
+
+    `definition` is the full wire `Resource` (listed verbatim). `content` is
+    served on every read -- a `str` as `TextResourceContents`, `bytes` as a
+    base64 `BlobResourceContents` -- with `uri`/`mimeType` from `definition`.
+    """
+    if not isinstance(content, (str, bytes, bytearray)):
+        raise TypeError(
+            "resource literal must be str or bytes, not "
+            f"{type(content).__name__!r}"
+        )
+
+    async def reader():
+        return content
+
+    return Resource(definition=definition, reader=reader)
+
+
+def build_path_resource(
+    definition: resource_types.Resource,
+    path: pathlib.Path,
+    *,
+    describe_contents: DescribeContents | None = None,
+) -> Resource:
+    """Build a static resource whose contents are read from a file.
+
+    `definition` is the full wire `Resource` (listed verbatim). `path` is read
+    lazily on every read. `describe_contents(path, data)` classifies the bytes --
+    returning `(mime_type, block_class)` -- and so overrides `definition`'s MIME
+    type for the served content; without it the file is served as a base64
+    `BlobResourceContents` typed by `definition.mime_type`.
+    """
+
+    async def reader():
+        data = path.read_bytes()
+        if describe_contents is not None:
+            mime_type, block_class = describe_contents(path, data)
+        else:
+            mime_type, block_class = definition.mime_type, BlobResourceContents
+        return _content_block(definition.uri, data, mime_type, block_class)
+
+    return Resource(definition=definition, reader=reader)
+
+
+def _content_block(uri, data, mime_type, block_class):
+    if block_class is TextResourceContents:
+        return TextResourceContents(
+            uri=uri, text=data.decode("utf-8"), mime_type=mime_type
+        )
+    if block_class is BlobResourceContents:
+        return BlobResourceContents(
+            uri=uri,
+            blob=base64.b64encode(data).decode("ascii"),
+            mime_type=mime_type,
+        )
+    raise TypeError(
+        "describe_contents must return TextResourceContents or "
+        f"BlobResourceContents, not "
+        f"{getattr(block_class, '__name__', block_class)!r}"
     )
