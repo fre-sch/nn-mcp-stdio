@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import pathlib
 import typing
 
 import aiojobs
@@ -149,10 +150,54 @@ class Server:
                 description=description,
                 mime_type=mime_type,
             )
-            self._resources[built.definition.uri] = built
+            self._register_resource(built)
             return reader
 
         return register
+
+    def add_resource_from_literal(
+        self,
+        definition: resource_types.Resource,
+        content: str | bytes,
+    ) -> None:
+        """Register a static resource whose contents are a fixed literal.
+
+        `definition` is the full `Resource` (uri, name, mimeType, ...) -- listed
+        verbatim, read by `definition.uri`. `content` is served on every read: a
+        `str` as text, `bytes` as a base64 blob, with uri/mimeType from
+        `definition`. Registering a resource advertises the `resources`
+        capability at `initialize`.
+        """
+        self._register_resource(
+            resources.build_literal_resource(definition, content)
+        )
+
+    def add_resource_from_path(
+        self,
+        definition: resource_types.Resource,
+        path: pathlib.Path,
+        *,
+        describe_contents: resources.DescribeContents | None = None,
+    ) -> None:
+        """Register a static resource whose contents are read from a file.
+
+        `definition` is the full `Resource`, listed verbatim and read by
+        `definition.uri`; the file at `path` is read lazily on every read.
+        `describe_contents(path, data)` classifies the bytes -- returning the
+        MIME type and the contents block type (`TextResourceContents` or
+        `BlobResourceContents`) -- and so overrides `definition.mime_type` for
+        the served content; without it the file is served as a base64 blob typed
+        by `definition.mime_type`. Registering a resource advertises the
+        `resources` capability at `initialize`.
+        """
+        self._register_resource(
+            resources.build_path_resource(
+                definition, path, describe_contents=describe_contents
+            )
+        )
+
+    def _register_resource(self, built: resources.Resource) -> None:
+        self._resources[built.definition.uri] = built
 
     async def _initialize(self, params):
         params = params or {}
