@@ -37,9 +37,12 @@ def library():
     server = Server(name="lib", version="0.1.0")
 
     @server.resource(
-        "file:///config.json",
-        mime_type="application/json",
-        description="The service configuration.",
+        resource_types.Resource(
+            uri="file:///config.json",
+            name="config",
+            mime_type="application/json",
+            description="The service configuration.",
+        )
     )
     async def config() -> str:
         return '{"debug": true}'
@@ -51,9 +54,30 @@ async def test_list_reports_the_registered_resource():
     out = await run(library(), [request("resources/list", request_id=1)])
     (resource,) = out[0]["result"]["resources"]
     assert resource["uri"] == "file:///config.json"
-    assert resource["name"] == "config"  # defaults to the reader's name
+    assert resource["name"] == "config"  # from the Resource definition
     assert resource["mimeType"] == "application/json"
     assert resource["description"] == "The service configuration."
+
+
+async def test_decorator_carries_metadata_a_reader_cannot():
+    # title/meta have no function-signature source; the Resource carries them.
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource(
+        resource_types.Resource(
+            uri="doc:///guide",
+            name="guide",
+            title="User Guide",
+            meta={"section": "intro"},
+        )
+    )
+    async def guide() -> str:
+        return "..."
+
+    out = await run(server, [request("resources/list", request_id=1)])
+    (resource,) = out[0]["result"]["resources"]
+    assert resource["title"] == "User Guide"
+    assert resource["_meta"] == {"section": "intro"}
 
 
 async def test_read_wraps_a_str_into_text_contents():
@@ -69,7 +93,11 @@ async def test_read_wraps_a_str_into_text_contents():
 async def test_read_wraps_bytes_into_a_base64_blob():
     server = Server(name="lib", version="0.1.0")
 
-    @server.resource("bin:///logo", mime_type="image/png")
+    @server.resource(
+        resource_types.Resource(
+            uri="bin:///logo", name="logo", mime_type="image/png"
+        )
+    )
     async def logo() -> bytes:
         return b"\x89PNG\r\n"
 
@@ -83,7 +111,7 @@ async def test_read_wraps_bytes_into_a_base64_blob():
 async def test_read_passes_through_explicit_contents():
     server = Server(name="lib", version="0.1.0")
 
-    @server.resource("doc:///two")
+    @server.resource(resource_types.Resource(uri="doc:///two", name="two"))
     async def two() -> list:
         return [
             content.TextResourceContents(uri="doc:///two#a", text="a"),
@@ -104,7 +132,7 @@ async def test_read_unknown_uri_is_resource_not_found():
 async def test_reader_receives_context():
     server = Server(name="lib", version="0.1.0")
 
-    @server.resource("who:///am/i")
+    @server.resource(resource_types.Resource(uri="who:///am/i", name="who"))
     async def who(ctx: Context) -> str:
         return str(ctx.request_id)
 
@@ -151,7 +179,7 @@ def test_non_async_reader_is_rejected():
     server = Server(name="lib", version="0.1.0")
     with pytest.raises(TypeError):
 
-        @server.resource("sync:///no")
+        @server.resource(resource_types.Resource(uri="sync:///no", name="no"))
         def config():
             return "x"
 
@@ -159,7 +187,7 @@ def test_non_async_reader_is_rejected():
 async def test_bad_return_is_a_type_error():
     server = Server(name="lib", version="0.1.0")
 
-    @server.resource("num:///bad")
+    @server.resource(resource_types.Resource(uri="num:///bad", name="bad"))
     async def bad() -> int:
         return 42
 

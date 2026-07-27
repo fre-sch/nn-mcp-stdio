@@ -121,36 +121,24 @@ class Server:
             return register(function)
         return register  # @server.tool(...)
 
-    def resource(
-        self,
-        uri: str,
-        *,
-        name: str | None = None,
-        title: str | None = None,
-        description: str | None = None,
-        mime_type: str | None = None,
-    ) -> typing.Callable:
+    def resource(self, definition: resource_types.Resource) -> typing.Callable:
         """Register an `async def` reader as a readable resource.
 
-        The resource is identified -- and read -- by `uri`; a resource takes no
-        arguments (search is a tool, not a resource). `name` defaults to the
-        reader's name, `description` to its docstring. The reader returns the
-        contents: a `str`/`bytes` is wrapped, filling `uri`/`mimeType` from here;
-        a `*ResourceContents` (or list) or `ReadResourceResult` is used as-is. It
+        `definition` is the full `Resource`: its `uri` is the resource's identity
+        and the `resources/read` key, and it is listed verbatim (a reader
+        describes only its contents, so the decorator carries all the metadata --
+        `title`, `annotations`, `meta`, ...). A resource takes no arguments
+        (search is a tool, not a resource). The reader returns the contents: a
+        `str`/`bytes` is wrapped, filling `uri`/`mimeType` from `definition`; a
+        `*ResourceContents` (or list) or `ReadResourceResult` is used as-is. It
         may declare a `Context` parameter. Registering a resource advertises the
         `resources` capability at `initialize`.
         """
 
         def register(reader):
-            built = resources.build_resource(
-                reader,
-                uri,
-                name=name,
-                title=title,
-                description=description,
-                mime_type=mime_type,
+            self._register_resource(
+                resources.build_resource(reader, definition)
             )
-            self._register_resource(built)
             return reader
 
         return register
