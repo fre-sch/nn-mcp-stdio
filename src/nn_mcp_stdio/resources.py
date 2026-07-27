@@ -89,25 +89,17 @@ class Resource:
 
 def build_resource(
     reader: typing.Callable,
-    uri: str,
-    *,
-    name: str | None = None,
-    title: str | None = None,
-    description: str | None = None,
-    mime_type: str | None = None,
+    definition: resource_types.Resource,
 ) -> Resource:
-    """Build a `Resource` from an `async def` reader (see module docstring)."""
+    """Build a `Resource` from an `async def` reader (see module docstring).
+
+    `definition` is the full wire `Resource` -- the decorator carries the whole
+    identity, since a reader describes only its contents, not its metadata.
+    """
     if not inspect.iscoroutinefunction(reader):
         raise TypeError(
             f"resource reader {reader.__name__!r} must be `async def`"
         )
-    definition = resource_types.Resource(
-        uri=uri,
-        name=name or reader.__name__,
-        title=title,
-        description=description or inspect.getdoc(reader),
-        mime_type=mime_type,
-    )
     return Resource(
         definition=definition,
         reader=reader,

@@ -279,26 +279,37 @@ they never interleave. All `Context` methods are `async`.
 A resource is *identity*: a stable URI and a reader that returns its contents.
 Unlike a tool it takes no arguments -- there is nothing to validate, and no
 query. (Searching a collection is a *tool*, not a resource.) Register one with
-`@server.resource(uri, ...)`:
+`@server.resource(definition)`, where `definition` is a full
+`nn_mcp_types.resources.Resource`:
 
 ```python
 import json
 
 from nn_mcp_stdio import Server
+from nn_mcp_types import resources
 
 server = Server(name="lib", version="0.1.0")
 
 
-@server.resource("file:///config.json", mime_type="application/json")
+@server.resource(
+    resources.Resource(
+        uri="file:///config.json",
+        name="config",
+        title="The service configuration",
+        mime_type="application/json",
+    )
+)
 async def config() -> str:
-    """The service configuration."""
     return json.dumps({"debug": True})
 ```
 
-`config` is listed by `resources/list` (its `name` defaults to the function name,
-`description` to the docstring) and read by `resources/read` for
-`file:///config.json`. The reader's return is mapped to a `ReadResourceResult`,
-filling `uri`/`mimeType` from the registration:
+Unlike `@server.tool` -- whose handler's signature and docstring *are* the
+definition -- a reader describes only its contents, not its identity or metadata.
+So the decorator carries the whole `Resource` (there is nothing to infer from the
+reader, and this is the only way to set `title`, `annotations`, `meta`, ...). The
+`Resource` is listed by `resources/list` verbatim and read by `resources/read`
+for its `uri`. The reader's return is mapped to a `ReadResourceResult`, filling
+`uri`/`mimeType` from `definition`:
 
 - `str` -> a single `TextResourceContents`,
 - `bytes` -> a single `BlobResourceContents` (base64-encoded),
