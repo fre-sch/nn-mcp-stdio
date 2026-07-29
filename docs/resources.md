@@ -14,8 +14,16 @@ or metadata. So the definition holds the whole identity (`uri`, `name`, `title`,
 `mime_type`, `annotations`, `meta`, ...); it is listed by `resources/list`
 verbatim and read by its `uri`.
 
-There are two ways to register: a **dynamic reader** that computes contents on
-each read, and the **fixed** registrations for a literal or a file.
+There are three ways to register: a **dynamic reader** that computes contents on
+each read, the **fixed** registrations for a literal or a file, and a **template**
+-- a URI *shape* that reads any URI matching it.
+
+`resources/read` is a router. It resolves the requested URI to the one provider
+that claims it, most-specific-wins: an exact URI (any fixed or dynamic resource)
+beats a template, and a more-specific template beats a less-specific one. So a
+fixed `file:///project/last_build` shadows a `file:///project/{path}` template
+for that one URI, while every other `file:///project/...` still routes to the
+template.
 
 ## Dynamic resources (a reader)
 
@@ -111,8 +119,46 @@ UTF-8. Without a classifier the file is served as a base64 `BlobResourceContents
 typed by `definition.mime_type`. A non-`str`/`bytes` literal, or a `block_type`
 that is neither contents class, raises `TypeError`.
 
+## Resource templates (a parameterized reader)
+
+A template describes resources whose URI space is too large or too dynamic to
+enumerate -- a file tree, a record by id. `@server.resource_template(definition)`
+decorates an `async def` reader against a `ResourceTemplate` whose `uri_template`
+is an [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) URI template. The
+template is advertised verbatim by `resources/templates/list`; the *client*
+expands it to concrete URIs, and a `resources/read` of one routes back to the
+reader with the template's variables extracted from the URI and injected by name
+-- exactly as a tool's arguments are:
+
+```python
+from nn_mcp_stdio import Context, Server
+from nn_mcp_types import resources
+
+server = Server(name="lib", version="0.1.0")
+
+
+@server.resource_template(
+    resources.ResourceTemplate(
+        uri_template="file:///project/{path}",
+        name="project-file",
+        mime_type="text/plain",
+    )
+)
+async def project_file(path, ctx: Context) -> str:
+    return read_project_file(path)  # `path` is the matched URI segment
+```
+
+The reader's parameters are the template's `{vars}`; it may also declare a
+`Context`. Its return is mapped exactly as a dynamic reader's is, with the
+concrete request URI (not the template) typing a wrapped `str`/`bytes`.
+
+The supported template subset is RFC 6570 *simple variables*: `{var}` (one path
+segment -- the value does not cross `/`), `{var*}` (a wildcard -- the value may
+span segments), and a trailing `{?a,b}` query block. Registering a template with
+any operator outside this subset is refused *at registration* -- a template the
+router cannot reverse-match is never advertised.
+
 ## Not yet supported
 
-Static resources only for now. URI templates (`resources/templates/list`),
-`subscribe`/`unsubscribe`, and the `updated`/`list_changed` notifications are a
-later slice.
+`subscribe`/`unsubscribe`, the `updated`/`list_changed` notifications, and
+pagination of `resources/list` / `resources/templates/list` are a later slice.
