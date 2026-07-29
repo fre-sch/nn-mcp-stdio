@@ -191,7 +191,7 @@ async def test_bad_return_is_a_type_error():
     async def bad() -> int:
         return 42
 
-    built = server._resources["num:///bad"]
+    built, _ = server._router.match("num:///bad")
     with pytest.raises(TypeError):
         await built.read("num:///bad", {})
 
@@ -325,7 +325,7 @@ async def test_path_classifier_bad_block_type_is_a_type_error(tmp_path):
         describe_contents=lambda path, data: ("text/plain", str),
     )
 
-    built = server._resources["file:///x.dat"]
+    built, _ = server._router.match("file:///x.dat")
     with pytest.raises(TypeError):
         await built.read("file:///x.dat", {})
 
@@ -481,3 +481,34 @@ def test_template_with_an_unsupported_operator_is_rejected_at_registration():
 async def test_no_templates_are_listed_when_none_registered():
     out = await run(library(), [templates_list()])
     assert out[0]["result"]["resourceTemplates"] == []
+
+
+async def test_lists_partition_direct_and_template_registrations():
+    # Both list endpoints derive from the one router; each surfaces only its kind.
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource(
+        resource_types.Resource(uri="file:///project/pinned", name="pinned")
+    )
+    async def pinned() -> str:
+        return "direct"
+
+    @server.resource_template(template("file:///project/{path}"))
+    async def project_file(path) -> str:
+        return path
+
+    listed = await run(server, [request("resources/list", request_id=1)])
+    (resource,) = listed[0]["result"]["resources"]
+    assert resource["uri"] == "file:///project/pinned"
+    assert "uriTemplate" not in resource
+
+    templates = await run(server, [templates_list()])
+    (template_def,) = templates[0]["result"]["resourceTemplates"]
+    assert template_def["uriTemplate"] == "file:///project/{path}"
+
+
+def test_server_keeps_no_shadow_resource_dicts():
+    # The router owns the route set; no parallel per-kind bookkeeping remains.
+    server = Server(name="lib", version="0.1.0")
+    assert not hasattr(server, "_resources")
+    assert not hasattr(server, "_resource_templates")
