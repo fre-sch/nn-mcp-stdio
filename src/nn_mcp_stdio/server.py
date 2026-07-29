@@ -29,6 +29,15 @@ from nn_mcp_stdio.transport import StdioTransport, Transport
 log = logging.getLogger("nn_mcp_stdio")
 
 
+def _is_template_route(route) -> bool:
+    """Is this router route a resource *template* (vs. a direct resource)?
+
+    Decided by the stored resource's wire-definition type -- a `ResourceTemplate`
+    lists under `resources/templates/list`, a `Resource` under `resources/list`.
+    """
+    return isinstance(route.value.definition, resource_types.ResourceTemplate)
+
+
 class Server:
     """An MCP server. Register handlers, then `await server.run()`.
 
@@ -52,11 +61,10 @@ class Server:
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
         self._tools = {}
-        # Direct resources (uri -> Resource) and templates (uriTemplate ->
-        # Resource) are kept for listing; the router resolves a read URI to
-        # either (most-specific-wins, so a direct resource shadows a template).
-        self._resources = {}
-        self._resource_templates = {}
+        # The route table owns the resource set: direct resources and templates
+        # both register here, a read resolves to the most-specific match (so a
+        # direct resource shadows an overlapping template), and the two list
+        # endpoints iterate it -- no shadow copy of the registrations.
         self._router = Router()
         self._client = None  # the peer's Implementation, captured at initialize
         self._log_level = None  # last logging/setLevel; filtering deferred
@@ -216,14 +224,12 @@ class Server:
         )
 
     def _register_resource(self, built: resources.Resource) -> None:
-        self._resources[built.definition.uri] = built
         self._router.add(built.definition.uri, built)
 
     def _register_resource_template(self, built: resources.Resource) -> None:
         # `add` rejects a uriTemplate with an unsupported RFC 6570 operator here,
         # at registration -- a template the router cannot reverse is never
         # advertised.
-        self._resource_templates[built.definition.uri_template] = built
         self._router.add(built.definition.uri_template, built)
 
     async def _initialize(self, params):
@@ -246,9 +252,7 @@ class Server:
             changes["logging"] = {}
         if self._tools and self._capabilities.tools is None:
             changes["tools"] = lifecycle.ToolsCapability()
-        if (
-            self._resources or self._resource_templates
-        ) and self._capabilities.resources is None:
+        if len(self._router) and self._capabilities.resources is None:
             changes["resources"] = lifecycle.ResourcesCapability()
         if changes:
             return dataclasses.replace(self._capabilities, **changes)
@@ -273,17 +277,24 @@ class Server:
         return await tool.call(params.get("arguments"), context)
 
     async def _list_resources(self, params):
+        # Direct resources are every route whose value is not a template. The
+        # split is by the stored definition's type, not the router's route kind:
+        # a template with no `{vars}` routes as an exact URI, yet still lists as a
+        # template.
         return resource_types.ListResourcesResult(
             resources=[
-                resource.definition for resource in self._resources.values()
+                route.value.definition
+                for route in self._router
+                if not _is_template_route(route)
             ]
         )
 
     async def _list_resource_templates(self, params):
         return resource_types.ListResourceTemplatesResult(
             resource_templates=[
-                template.definition
-                for template in self._resource_templates.values()
+                route.value.definition
+                for route in self._router
+                if _is_template_route(route)
             ]
         )
 
