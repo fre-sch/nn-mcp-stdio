@@ -158,6 +158,13 @@ span segments), and a trailing `{?a,b}` query block. Registering a template with
 any operator outside this subset is refused *at registration* -- a template the
 router cannot reverse-match is never advertised.
 
+A `uri_template` must carry **at least one** parameter (a `{var}` or a `{?q}`
+block). A literal one expands and completes nothing -- it is a fixed URI, i.e. a
+resource -- so it is rejected at registration; register it with `@server.resource`
+instead. Correspondingly, a resource whose URI a template also matches shadows
+the template for that one URI (routing is most-specific-wins), so a fixed
+`file:///project/pinned` and a `file:///project/{path}` template coexist.
+
 ## Not yet supported
 
 `subscribe`/`unsubscribe`, the `updated`/`list_changed` notifications, and

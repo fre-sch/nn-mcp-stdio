@@ -14,7 +14,7 @@ import pathlib
 import typing
 
 import aiojobs
-from nn_rfc6570_router import Router
+from nn_rfc6570_router import LiteralRoute, Router, TemplateRoute
 
 from nn_mcp_types import jsonrpc, lifecycle
 from nn_mcp_types import logging as mcp_logging
@@ -27,15 +27,6 @@ from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
 log = logging.getLogger("nn_mcp_stdio")
-
-
-def _is_template_route(route) -> bool:
-    """Is this router route a resource *template* (vs. a direct resource)?
-
-    Decided by the stored resource's wire-definition type -- a `ResourceTemplate`
-    lists under `resources/templates/list`, a `Resource` under `resources/list`.
-    """
-    return isinstance(route.value.definition, resource_types.ResourceTemplate)
 
 
 class Server:
@@ -277,15 +268,14 @@ class Server:
         return await tool.call(params.get("arguments"), context)
 
     async def _list_resources(self, params):
-        # Direct resources are every route whose value is not a template. The
-        # split is by the stored definition's type, not the router's route kind:
-        # a template with no `{vars}` routes as an exact URI, yet still lists as a
-        # template.
+        # Direct resources are the router's literal routes: a `Resource`'s uri is
+        # a concrete URI, and a template must carry parameters, so the two
+        # discovery surfaces correspond exactly to the two route kinds.
         return resource_types.ListResourcesResult(
             resources=[
                 route.value.definition
                 for route in self._router
-                if not _is_template_route(route)
+                if isinstance(route, LiteralRoute)
             ]
         )
 
@@ -294,7 +284,7 @@ class Server:
             resource_templates=[
                 route.value.definition
                 for route in self._router
-                if _is_template_route(route)
+                if isinstance(route, TemplateRoute)
             ]
         )
 

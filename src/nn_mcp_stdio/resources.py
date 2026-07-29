@@ -18,6 +18,8 @@ import logging
 import pathlib
 import typing
 
+from nn_rfc6570_router import is_literal
+
 from nn_mcp_types import resources as resource_types
 from nn_mcp_types.content import BlobResourceContents, TextResourceContents
 
@@ -132,10 +134,20 @@ def build_template_resource(
     route the reader answers. The reader's parameters are the template's `{vars}`
     -- the router extracts them from the concrete URI and injects them by name --
     plus an optional `Context`. The return is mapped like any resource read.
+
+    The `uri_template` must carry at least one RFC 6570 expression: a literal one
+    constructs and completes nothing, so it is a `Resource`, not a template
+    (register it with `@server.resource` instead). A `{?a,b}` query block counts.
     """
     if not inspect.iscoroutinefunction(reader):
         raise TypeError(
             f"resource template reader {reader.__name__!r} must be `async def`"
+        )
+    if is_literal(definition.uri_template):
+        raise ValueError(
+            f"resource template {definition.uri_template!r} has no URI template "
+            "parameter -- a parameter-less template is a resource; register it "
+            "with @server.resource"
         )
     return Resource(
         definition=definition,
