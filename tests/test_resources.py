@@ -478,6 +478,34 @@ def test_template_with_an_unsupported_operator_is_rejected_at_registration():
             return path
 
 
+def test_parameterless_template_is_rejected():
+    # A literal uri_template carries no parameter -- it is a resource, not a
+    # template (nothing to expand or complete). Rejected at registration.
+    server = Server(name="lib", version="0.1.0")
+    with pytest.raises(ValueError):
+
+        @server.resource_template(template("file:///project/pinned"))
+        async def pinned() -> str:
+            return "x"
+
+
+async def test_query_only_template_is_accepted():
+    # A `{?q}` block is a parameter (a client can complete it), so the template
+    # is valid even with a literal path.
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("search://items{?q}"))
+    async def search(q="") -> str:
+        return f"query={q}"
+
+    listed = await run(server, [templates_list()])
+    (template_def,) = listed[0]["result"]["resourceTemplates"]
+    assert template_def["uriTemplate"] == "search://items{?q}"
+
+    out = await run(server, [read("search://items?q=hello")])
+    assert out[0]["result"]["contents"][0]["text"] == "query=hello"
+
+
 async def test_no_templates_are_listed_when_none_registered():
     out = await run(library(), [templates_list()])
     assert out[0]["result"]["resourceTemplates"] == []
