@@ -191,7 +191,7 @@ async def test_bad_return_is_a_type_error():
     async def bad() -> int:
         return 42
 
-    built, _ = server._router.match("num:///bad")
+    built, _ = server._resource_router.match("num:///bad")
     with pytest.raises(TypeError):
         await built.read("num:///bad", {})
 
@@ -325,7 +325,7 @@ async def test_path_classifier_bad_block_type_is_a_type_error(tmp_path):
         describe_contents=lambda path, data: ("text/plain", str),
     )
 
-    built, _ = server._router.match("file:///x.dat")
+    built, _ = server._resource_router.match("file:///x.dat")
     with pytest.raises(TypeError):
         await built.read("file:///x.dat", {})
 

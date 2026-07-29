@@ -56,7 +56,7 @@ class Server:
         # both register here, a read resolves to the most-specific match (so a
         # direct resource shadows an overlapping template), and the two list
         # endpoints iterate it -- no shadow copy of the registrations.
-        self._router = Router()
+        self._resource_router = Router()
         self._client = None  # the peer's Implementation, captured at initialize
         self._log_level = None  # last logging/setLevel; filtering deferred
         self._outbox = None  # the outbound queue, live for the run() loop
@@ -215,13 +215,13 @@ class Server:
         )
 
     def _register_resource(self, built: resources.Resource) -> None:
-        self._router.add(built.definition.uri, built)
+        self._resource_router.add(built.definition.uri, built)
 
     def _register_resource_template(self, built: resources.Resource) -> None:
         # `add` rejects a uriTemplate with an unsupported RFC 6570 operator here,
         # at registration -- a template the router cannot reverse is never
         # advertised.
-        self._router.add(built.definition.uri_template, built)
+        self._resource_router.add(built.definition.uri_template, built)
 
     async def _initialize(self, params):
         params = params or {}
@@ -243,7 +243,7 @@ class Server:
             changes["logging"] = {}
         if self._tools and self._capabilities.tools is None:
             changes["tools"] = lifecycle.ToolsCapability()
-        if len(self._router) and self._capabilities.resources is None:
+        if len(self._resource_router) and self._capabilities.resources is None:
             changes["resources"] = lifecycle.ResourcesCapability()
         if changes:
             return dataclasses.replace(self._capabilities, **changes)
@@ -274,7 +274,7 @@ class Server:
         return resource_types.ListResourcesResult(
             resources=[
                 route.value.definition
-                for route in self._router
+                for route in self._resource_router
                 if isinstance(route, LiteralRoute)
             ]
         )
@@ -283,7 +283,7 @@ class Server:
         return resource_types.ListResourceTemplatesResult(
             resource_templates=[
                 route.value.definition
-                for route in self._router
+                for route in self._resource_router
                 if isinstance(route, TemplateRoute)
             ]
         )
@@ -291,7 +291,9 @@ class Server:
     async def _read_resource(self, params, context: Context):
         params = params or {}
         uri = params.get("uri")
-        matched = self._router.match(uri) if isinstance(uri, str) else None
+        matched = (
+            self._resource_router.match(uri) if isinstance(uri, str) else None
+        )
         if matched is None:
             raise errors.resource_not_found(uri)
         resource, variables = matched
