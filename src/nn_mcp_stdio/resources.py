@@ -18,7 +18,7 @@ import logging
 import pathlib
 import typing
 
-from nn_rfc6570_router import is_literal
+import nn_rfc6570_router
 
 from nn_mcp_types import resources as resource_types
 from nn_mcp_types.content import BlobResourceContents, TextResourceContents
@@ -143,7 +143,7 @@ def build_template_resource(
         raise TypeError(
             f"resource template reader {reader.__name__!r} must be `async def`"
         )
-    if is_literal(definition.uri_template):
+    if nn_rfc6570_router.is_literal(definition.uri_template):
         raise ValueError(
             f"resource template {definition.uri_template!r} has no URI template "
             "parameter -- a parameter-less template is a resource; register it "
