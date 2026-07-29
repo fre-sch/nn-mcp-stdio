@@ -14,6 +14,7 @@ import pathlib
 import typing
 
 import aiojobs
+from nn_rfc6570_router import Router
 
 from nn_mcp_types import jsonrpc, lifecycle
 from nn_mcp_types import logging as mcp_logging
@@ -51,7 +52,12 @@ class Server:
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
         self._tools = {}
-        self._resources = {}  # uri -> registered Resource
+        # Direct resources (uri -> Resource) and templates (uriTemplate ->
+        # Resource) are kept for listing; the router resolves a read URI to
+        # either (most-specific-wins, so a direct resource shadows a template).
+        self._resources = {}
+        self._resource_templates = {}
+        self._router = Router()
         self._client = None  # the peer's Implementation, captured at initialize
         self._log_level = None  # last logging/setLevel; filtering deferred
         self._outbox = None  # the outbound queue, live for the run() loop
@@ -63,6 +69,7 @@ class Server:
             tool_types.TOOLS_LIST: self._list_tools,
             tool_types.TOOLS_CALL: self._call_tool,
             resource_types.RESOURCES_LIST: self._list_resources,
+            resource_types.RESOURCES_TEMPLATES_LIST: self._list_resource_templates,
             resource_types.RESOURCES_READ: self._read_resource,
         }
         self._notification_handlers = {}
@@ -143,6 +150,30 @@ class Server:
 
         return register
 
+    def resource_template(
+        self, definition: resource_types.ResourceTemplate
+    ) -> typing.Callable:
+        """Register an `async def` reader as a resource template.
+
+        `definition` is the full `ResourceTemplate`: its `uri_template` (RFC 6570)
+        is advertised verbatim by `resources/templates/list` and becomes a route.
+        A `resources/read` of any URI the template matches invokes the reader with
+        the template's `{vars}` extracted from the URI and injected by name
+        (mirroring tool arguments); the reader may also declare a `Context`
+        parameter. The reader returns the contents like any resource reader. A
+        direct resource whose URI the template also matches shadows it (routing is
+        most-specific-wins). Registering a template advertises the `resources`
+        capability at `initialize`.
+        """
+
+        def register(reader):
+            self._register_resource_template(
+                resources.build_template_resource(reader, definition)
+            )
+            return reader
+
+        return register
+
     def add_resource_from_literal(
         self,
         definition: resource_types.Resource,
@@ -186,6 +217,14 @@ class Server:
 
     def _register_resource(self, built: resources.Resource) -> None:
         self._resources[built.definition.uri] = built
+        self._router.add(built.definition.uri, built)
+
+    def _register_resource_template(self, built: resources.Resource) -> None:
+        # `add` rejects a uriTemplate with an unsupported RFC 6570 operator here,
+        # at registration -- a template the router cannot reverse is never
+        # advertised.
+        self._resource_templates[built.definition.uri_template] = built
+        self._router.add(built.definition.uri_template, built)
 
     async def _initialize(self, params):
         params = params or {}
@@ -207,7 +246,9 @@ class Server:
             changes["logging"] = {}
         if self._tools and self._capabilities.tools is None:
             changes["tools"] = lifecycle.ToolsCapability()
-        if self._resources and self._capabilities.resources is None:
+        if (
+            self._resources or self._resource_templates
+        ) and self._capabilities.resources is None:
             changes["resources"] = lifecycle.ResourcesCapability()
         if changes:
             return dataclasses.replace(self._capabilities, **changes)
@@ -238,13 +279,22 @@ class Server:
             ]
         )
 
+    async def _list_resource_templates(self, params):
+        return resource_types.ListResourceTemplatesResult(
+            resource_templates=[
+                template.definition
+                for template in self._resource_templates.values()
+            ]
+        )
+
     async def _read_resource(self, params, context: Context):
         params = params or {}
         uri = params.get("uri")
-        resource = self._resources.get(uri)
-        if resource is None:
+        matched = self._router.match(uri) if isinstance(uri, str) else None
+        if matched is None:
             raise errors.resource_not_found(uri)
-        return await resource.read(context)
+        resource, variables = matched
+        return await resource.read(uri, variables, context)
 
     async def run(self, transport: Transport | None = None) -> None:
         transport = transport or StdioTransport()

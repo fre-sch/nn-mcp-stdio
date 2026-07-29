@@ -48,8 +48,8 @@ dataclass, and the handler is called with natural kwargs.
 
 ## Example
 
-One server exposing a tool, two fixed resources (a literal and a file), and a
-dynamic resource read on demand:
+One server exposing a tool, two fixed resources (a literal and a file), a
+dynamic resource read on demand, and a URI-template resource:
 
 ```python
 import asyncio
@@ -111,6 +111,19 @@ async def clock() -> str:
     return datetime.datetime.now().isoformat()
 
 
+# A resource template: a URI shape read on demand. The client expands the
+# RFC 6570 template; a read routes back here with `{name}` extracted.
+@server.resource_template(
+    resources.ResourceTemplate(
+        uri_template="greeting://{name}",
+        name="greeting",
+        mime_type="text/plain",
+    )
+)
+async def greeting(name: str) -> str:
+    return f"Hello, {name}!"
+
+
 asyncio.run(server.run())
 ```
 
@@ -120,8 +133,8 @@ Guides to using each building block effectively:
 
 - [Tools](docs/tools.md) -- annotated handlers, per-argument constraints,
   structured output, return types, and errors.
-- [Resources](docs/resources.md) -- dynamic readers and the fixed
-  literal/file registrations.
+- [Resources](docs/resources.md) -- dynamic readers, the fixed literal/file
+  registrations, and URI-template resources.
 - [Context](docs/context.md) -- logging and progress back to the client
   mid-call.
 - [Other handlers](docs/handlers.md) -- registering raw requests and

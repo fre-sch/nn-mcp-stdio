@@ -12,10 +12,16 @@ requires-python = ">=3.12,<3.13"
 # version and description are read from src/nn_mcp_stdio/__init__.py
 # (__version__ and the module docstring) by flit.
 dynamic = ["version", "description"]
-# The sibling MCP types (editable path install for now, `pip install -e
-# ../nn-mcp-types`), the aiojobs background-task scheduler, and jsonschema for
-# strict argument validation (Draft202012Validator).
-dependencies = ["nn-mcp-types", "aiojobs>=1.4", "jsonschema>=4.18"]
+# The sibling MCP types and the sibling RFC 6570 router (editable path installs
+# for now, `pip install -e ../nn-mcp-types ../nn-rfc6570-router`), the aiojobs
+# background-task scheduler, and jsonschema for strict argument validation
+# (Draft202012Validator).
+dependencies = [
+    "nn-mcp-types",
+    "nn-rfc6570-router",
+    "aiojobs>=1.4",
+    "jsonschema>=4.18",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]

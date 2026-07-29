@@ -193,7 +193,7 @@ async def test_bad_return_is_a_type_error():
 
     built = server._resources["num:///bad"]
     with pytest.raises(TypeError):
-        await built.read()
+        await built.read("num:///bad", {})
 
 
 # -- static resources: add_resource_from_literal ---------------------------
@@ -327,4 +327,157 @@ async def test_path_classifier_bad_block_type_is_a_type_error(tmp_path):
 
     built = server._resources["file:///x.dat"]
     with pytest.raises(TypeError):
-        await built.read()
+        await built.read("file:///x.dat", {})
+
+
+# -- resource templates: @server.resource_template -------------------------
+
+
+def template(uri_template, **fields):
+    return resource_types.ResourceTemplate(
+        uri_template=uri_template, name="files", **fields
+    )
+
+
+def templates_list(request_id=1):
+    return request("resources/templates/list", request_id=request_id)
+
+
+async def test_template_is_listed_verbatim():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(
+        template(
+            "file:///project/{path}",
+            title="Project files",
+            mime_type="text/plain",
+        )
+    )
+    async def project_file(path) -> str:
+        return path
+
+    out = await run(server, [templates_list()])
+    (listed,) = out[0]["result"]["resourceTemplates"]
+    assert listed["uriTemplate"] == "file:///project/{path}"
+    assert listed["title"] == "Project files"
+    assert listed["mimeType"] == "text/plain"
+
+
+async def test_read_of_a_matching_uri_injects_extracted_variables():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("file:///project/{name}"))
+    async def project_file(name) -> str:
+        return f"contents of {name}"
+
+    out = await run(server, [read("file:///project/notes.txt")])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents["text"] == "contents of notes.txt"
+    # The wrapped return is typed by the concrete request URI, not the template.
+    assert contents["uri"] == "file:///project/notes.txt"
+
+
+async def test_wildcard_variable_spans_path_segments():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("file:///project/{path*}"))
+    async def project_file(path) -> str:
+        return path
+
+    out = await run(server, [read("file:///project/notes/todo.txt")])
+    (contents,) = out[0]["result"]["contents"]
+    # `{path*}` is a wildcard: its value may cross `/`.
+    assert contents["text"] == "notes/todo.txt"
+
+
+async def test_template_reader_receives_context():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("id:///{item}"))
+    async def by_id(item, ctx: Context) -> str:
+        return f"{item}@{ctx.request_id}"
+
+    out = await run(server, [read("id:///42", request_id=9)])
+    (contents,) = out[0]["result"]["contents"]
+    assert contents["text"] == "42@9"
+
+
+async def test_direct_resource_shadows_an_overlapping_template():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("file:///project/{path}"))
+    async def project_file(path) -> str:
+        return f"template: {path}"
+
+    @server.resource(
+        resource_types.Resource(
+            uri="file:///project/last_build", name="last_build"
+        )
+    )
+    async def last_build() -> str:
+        return "direct"
+
+    # The direct resource is maximally specific -> it wins the overlap.
+    shadowed = await run(server, [read("file:///project/last_build")])
+    assert shadowed[0]["result"]["contents"][0]["text"] == "direct"
+
+    # A sibling URI the direct resource does not claim still routes to template.
+    templated = await run(server, [read("file:///project/other")])
+    assert templated[0]["result"]["contents"][0]["text"] == "template: other"
+
+
+async def test_read_with_no_matching_route_is_resource_not_found():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("file:///project/{path}"))
+    async def project_file(path) -> str:
+        return path
+
+    out = await run(server, [read("other:///nope")])
+    assert out[0]["error"]["code"] == -32002
+
+
+async def test_template_advertises_the_resources_capability():
+    server = Server(name="lib", version="0.1.0")
+
+    @server.resource_template(template("file:///project/{path}"))
+    async def project_file(path) -> str:
+        return path
+
+    initialize = encode(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "c", "version": "1"},
+            },
+        }
+    )
+    out = await run(server, [initialize])
+    assert "resources" in out[0]["result"]["capabilities"]
+
+
+def test_non_async_template_reader_is_rejected():
+    server = Server(name="lib", version="0.1.0")
+    with pytest.raises(TypeError):
+
+        @server.resource_template(template("file:///project/{path}"))
+        def project_file(path):
+            return path
+
+
+def test_template_with_an_unsupported_operator_is_rejected_at_registration():
+    server = Server(name="lib", version="0.1.0")
+    with pytest.raises(Exception):
+        # `{+var}` is outside the built-in subset -> the router refuses the route.
+        @server.resource_template(template("file:///project/{+path}"))
+        async def project_file(path) -> str:
+            return path
+
+
+async def test_no_templates_are_listed_when_none_registered():
+    out = await run(library(), [templates_list()])
+    assert out[0]["result"]["resourceTemplates"] == []

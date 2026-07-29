@@ -1,12 +1,14 @@
 """Turn an async reader function into a readable MCP resource.
 
-A resource is *identity*: a stable URI and a reader producing its contents.
-Unlike a tool it takes no arguments -- there is nothing to validate on the way
-in (searching a collection is a *tool*, not a resource). `build_resource` wraps
-an `async def` reader
-with the resource's wire definition; `Resource.read` runs the reader and maps its
-return to a `ReadResourceResult`, filling `uri`/`mimeType` from the registration
-so the reader repeats neither.
+A resource is a readable URI. A **direct** resource is a fixed URI (its
+`definition` is a `Resource`); a **template** resource is a URI *shape* (its
+`definition` is a `ResourceTemplate`) that reads any URI its RFC 6570 template
+matches. `build_resource` / `build_template_resource` wrap an `async def` reader
+with its wire definition. `Resource.read(uri, variables, context)` runs the
+reader -- injecting the template `variables` the router extracted (empty for a
+direct resource) plus an optional `Context` -- and maps its return to a
+`ReadResourceResult`, filling `uri`/`mimeType` (from the concrete request URI and
+the definition) so the reader repeats neither.
 """
 
 import base64
@@ -29,27 +31,40 @@ _CONTENTS = (TextResourceContents, BlobResourceContents)
 
 @dataclasses.dataclass
 class Resource:
-    """A registered resource: its wire definition and its reader."""
+    """A registered resource: its wire definition and its reader.
 
-    definition: resource_types.Resource
+    `definition` is a `Resource` for a direct resource or a `ResourceTemplate`
+    for a template resource; both carry the `mime_type` a wrapped return is typed
+    with.
+    """
+
+    definition: resource_types.Resource | resource_types.ResourceTemplate
     reader: typing.Callable
     context_parameter: str | None = None
 
     async def read(
-        self, context: Context | None = None
+        self,
+        uri: str,
+        variables: dict[str, str] | None = None,
+        context: Context | None = None,
     ) -> resource_types.ReadResourceResult:
-        """Run the reader and map its return to a `ReadResourceResult`.
+        """Run the reader for `uri` and map its return to a `ReadResourceResult`.
 
-        A reader failure propagates to the server, which answers with a JSON-RPC
-        error -- a resource read has no in-band error result.
+        `variables` are the template variables the router extracted from `uri`
+        (empty for a direct resource); they are injected as keyword arguments,
+        mirroring tool-argument injection. A wrapped `str`/`bytes` return is
+        typed by `uri` and the definition's MIME type. A reader failure
+        propagates to the server, which answers with a JSON-RPC error -- a
+        resource read has no in-band error result.
         """
         keyword_arguments = {}
+        keyword_arguments.update(variables or {})
         if self.context_parameter is not None:
             keyword_arguments[self.context_parameter] = context
         result = await self.reader(**keyword_arguments)
-        return self._as_read_result(result)
+        return self._as_read_result(uri, result)
 
-    def _as_read_result(self, result):
+    def _as_read_result(self, uri, result):
         if isinstance(result, resource_types.ReadResourceResult):
             return result  # full control
         if isinstance(result, _CONTENTS):
@@ -60,11 +75,11 @@ class Resource:
             return resource_types.ReadResourceResult(contents=list(result))
         if isinstance(result, str):
             return resource_types.ReadResourceResult(
-                contents=[self._text(result)]
+                contents=[self._text(uri, result)]
             )
         if isinstance(result, (bytes, bytearray)):
             return resource_types.ReadResourceResult(
-                contents=[self._blob(bytes(result))]
+                contents=[self._blob(uri, bytes(result))]
             )
         raise TypeError(
             f"unsupported resource return {type(result).__name__!r}: return a "
@@ -72,16 +87,16 @@ class Resource:
             "ReadResourceResult"
         )
 
-    def _text(self, text):
+    def _text(self, uri, text):
         return TextResourceContents(
-            uri=self.definition.uri,
+            uri=uri,
             text=text,
             mime_type=self.definition.mime_type,
         )
 
-    def _blob(self, data):
+    def _blob(self, uri, data):
         return BlobResourceContents(
-            uri=self.definition.uri,
+            uri=uri,
             blob=base64.b64encode(data).decode("ascii"),
             mime_type=self.definition.mime_type,
         )
@@ -99,6 +114,28 @@ def build_resource(
     if not inspect.iscoroutinefunction(reader):
         raise TypeError(
             f"resource reader {reader.__name__!r} must be `async def`"
+        )
+    return Resource(
+        definition=definition,
+        reader=reader,
+        context_parameter=context_parameter(reader),
+    )
+
+
+def build_template_resource(
+    reader: typing.Callable,
+    definition: resource_types.ResourceTemplate,
+) -> Resource:
+    """Build a template `Resource` from an `async def` reader.
+
+    `definition` is the full wire `ResourceTemplate`; its `uri_template` is the
+    route the reader answers. The reader's parameters are the template's `{vars}`
+    -- the router extracts them from the concrete URI and injects them by name --
+    plus an optional `Context`. The return is mapped like any resource read.
+    """
+    if not inspect.iscoroutinefunction(reader):
+        raise TypeError(
+            f"resource template reader {reader.__name__!r} must be `async def`"
         )
     return Resource(
         definition=definition,
