@@ -11,16 +11,10 @@ version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
-# description is read from src/nn_mcp_stdio/__init__.py's module docstring by
-# flit.
 dynamic = ["description"]
-# The sibling MCP types and the sibling RFC 6570 router (editable path installs
-# for now, `pip install -e ../nn-mcp-types ../nn-rfc6570-router`), the aiojobs
-# background-task scheduler, and jsonschema for strict argument validation
-# (Draft202012Validator).
 dependencies = [
-    "nn-mcp-types",
-    "nn-rfc6570-router",
+    "nn-mcp-types @ git+https://github.com/fre-sch/nn-mcp-types@master",
+    "nn-rfc6570-router @ git+https://github.com/fre-sch/nn-rfc6570-router@master",
     "aiojobs>=1.4",
     "jsonschema>=4.18",
 ]
