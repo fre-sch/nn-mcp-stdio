@@ -7,12 +7,13 @@ name = "nn-mcp-stdio"
 authors = [
     { name = "Frederik Schumacher" },
 ]
+version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
-# version and description are read from src/nn_mcp_stdio/__init__.py
-# (__version__ and the module docstring) by flit.
-dynamic = ["version", "description"]
+# description is read from src/nn_mcp_stdio/__init__.py's module docstring by
+# flit.
+dynamic = ["description"]
 # The sibling MCP types and the sibling RFC 6570 router (editable path installs
 # for now, `pip install -e ../nn-mcp-types ../nn-rfc6570-router`), the aiojobs
 # background-task scheduler, and jsonschema for strict argument validation
@@ -26,7 +27,10 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]
-dev = ["black>=24"]
+dev = [
+    "black>=24",
+    "nn-semver @ git+https://github.com/fre-sch/nn-semver@master"
+]
 
 [tool.flit.module]
 # Distribution name is nn-mcp-stdio; import name is nn_mcp_stdio under src/.
