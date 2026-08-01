@@ -7,7 +7,7 @@ name = "nn-mcp-stdio"
 authors = [
     { name = "Frederik Schumacher" },
 ]
-version = "0.1.0"
+version = "1.0.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
