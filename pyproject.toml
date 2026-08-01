@@ -8,6 +8,7 @@ authors = [
     { name = "Frederik Schumacher" },
 ]
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.13"
 # version and description are read from src/nn_mcp_stdio/__init__.py
 # (__version__ and the module docstring) by flit.
