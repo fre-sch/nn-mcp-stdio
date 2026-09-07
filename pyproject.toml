@@ -10,21 +10,34 @@ authors = [
 version = "1.0.0"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.15"
 dynamic = ["description"]
 dependencies = [
-    "nn-mcp-types @ git+https://github.com/fre-sch/nn-mcp-types@master",
-    "nn-rfc6570-router @ git+https://github.com/fre-sch/nn-rfc6570-router@master",
+    "nn-mcp-types>=1.0",
+    "nn-rfc6570-router>=1.0",
     "aiojobs>=1.4",
     "jsonschema>=4.18",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]
-dev = [
-    "black>=24",
-    "nn-semver @ git+https://github.com/fre-sch/nn-semver@master"
-]
+dev = ["nn-semver>=1.0"]
+
+[project.urls]
+Repository = "https://gitlab.com/freschu/nn-mcp/nn-mcp-stdio"
+
+# `explicit = true` confines this index to the names pinned to it below, and a
+# pinned name is looked up nowhere else -- PyPI included. aiojobs and
+# jsonschema resolve from PyPI as usual.
+[[tool.uv.index]]
+name = "nn-mcp"
+url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple"
+explicit = true
+
+[tool.uv.sources]
+nn-mcp-types = { index = "nn-mcp" }
+nn-rfc6570-router = { index = "nn-mcp" }
+nn-semver = { index = "nn-mcp" }
 
 [tool.flit.module]
 # Distribution name is nn-mcp-stdio; import name is nn_mcp_stdio under src/.
@@ -34,5 +47,5 @@ name = "nn_mcp_stdio"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-[tool.black]
+[tool.ruff]
 line-length = 80
