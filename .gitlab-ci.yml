@@ -31,21 +31,26 @@ check:3.14:
     PYVER: "3.14"
 
 # Publishing is per project; installing is per group. Every push to master
-# publishes, so ci/published.py recognises a version already in the registry
-# rather than uploading the duplicate the registry would refuse -- a push
-# without a version bump is not an error worth a red pipeline.
+# publishes, and the registry refuses a version it already holds with
+# `400 Bad request - Validation failed: File name has already been taken`.
+# That is the expected answer to "nothing changed", so it is tolerated and
+# any other failure is still a failure.
 publish:
   stage: publish
   image: ghcr.io/astral-sh/uv:0.12.10-python3.12-trixie
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   script:
-    - |
-      if python3 ci/published.py; then
-        exit 0
-      fi
     - uv build --wheel
-    - uv publish
-        --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
-        --username gitlab-ci-token
-        --password "${CI_JOB_TOKEN}"
+    - |
+      set +e
+      output=$(uv publish \
+        --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
+        --username gitlab-ci-token \
+        --password "${CI_JOB_TOKEN}" 2>&1)
+      status=$?
+      echo "$output"
+      if [ $status -ne 0 ]; then
+        echo "$output" | grep -q "File name has already been taken" || exit $status
+        echo "This version is already published -- nothing to do."
+      fi
