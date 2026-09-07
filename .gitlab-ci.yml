@@ -12,7 +12,7 @@ variables:
   image: ghcr.io/astral-sh/uv:python${PYVER}-bookworm
   script:
     - uv sync --all-extras
-    - uv format --check --version 0.15.22 --preview-features format-command
+    - uv format --check --version 0.15.22
     - uv run pytest
 
 check:3.12:
