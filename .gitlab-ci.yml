@@ -1,0 +1,56 @@
+stages:
+  - check
+  - publish
+
+# uv derives these names from the index named `nn-mcp` in pyproject.toml.
+variables:
+  UV_INDEX_NN_MCP_USERNAME: gitlab-ci-token
+  UV_INDEX_NN_MCP_PASSWORD: ${CI_JOB_TOKEN}
+
+.check:
+  stage: check
+  image: ghcr.io/astral-sh/uv:python${PYVER}-bookworm
+  script:
+    - uv sync --all-extras
+    - uv format --check --version 0.15.22 --preview-features format-command
+    - uv run pytest
+
+check:3.12:
+  extends: .check
+  variables:
+    PYVER: "3.12"
+
+check:3.13:
+  extends: .check
+  variables:
+    PYVER: "3.13"
+
+check:3.14:
+  extends: .check
+  variables:
+    PYVER: "3.14"
+
+# Publishing is per project; installing is per group. Every push to master
+# publishes, so an unchanged version is skipped rather than failed -- the
+# registry refuses a duplicate, and a push without a version bump is not an
+# error worth a red pipeline.
+publish:
+  stage: publish
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+  script:
+    - |
+      version=$(uv run --no-project python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+      published=$(curl -sf --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages?package_type=pypi&package_name=${CI_PROJECT_NAME}" \
+        | grep -c "\"version\":\"${version}\"" || true)
+      if [ "$published" -gt 0 ]; then
+        echo "${CI_PROJECT_NAME} ${version} is already published -- nothing to do."
+        exit 0
+      fi
+      uv build
+      uv publish \
+        --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
+        --username gitlab-ci-token \
+        --password "${CI_JOB_TOKEN}"
