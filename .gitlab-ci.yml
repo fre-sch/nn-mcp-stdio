@@ -31,18 +31,21 @@ check:3.14:
     PYVER: "3.14"
 
 # Publishing is per project; installing is per group. Every push to master
-# publishes, so `--check-url` skips a version already in the registry rather
-# than failing on the duplicate the registry would refuse -- a push without a
-# version bump is not an error worth a red pipeline.
+# publishes, so ci/published.py recognises a version already in the registry
+# rather than uploading the duplicate the registry would refuse -- a push
+# without a version bump is not an error worth a red pipeline.
 publish:
   stage: publish
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   script:
+    - |
+      if python3 ci/published.py; then
+        exit 0
+      fi
     - uv build --wheel
     - uv publish
         --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
-        --check-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi/simple"
         --username gitlab-ci-token
         --password "${CI_JOB_TOKEN}"
