@@ -31,26 +31,18 @@ check:3.14:
     PYVER: "3.14"
 
 # Publishing is per project; installing is per group. Every push to master
-# publishes, so an unchanged version is skipped rather than failed -- the
-# registry refuses a duplicate, and a push without a version bump is not an
-# error worth a red pipeline.
+# publishes, so `--check-url` skips a version already in the registry rather
+# than failing on the duplicate the registry would refuse -- a push without a
+# version bump is not an error worth a red pipeline.
 publish:
   stage: publish
   image: ghcr.io/astral-sh/uv:python3.12-bookworm
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   script:
-    - |
-      version=$(uv run --no-project python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-      published=$(curl -sf --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages?package_type=pypi&package_name=${CI_PROJECT_NAME}" \
-        | grep -c "\"version\":\"${version}\"" || true)
-      if [ "$published" -gt 0 ]; then
-        echo "${CI_PROJECT_NAME} ${version} is already published -- nothing to do."
-        exit 0
-      fi
-      uv build
-      uv publish \
-        --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi" \
-        --username gitlab-ci-token \
+    - uv build
+    - uv publish
+        --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
+        --check-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi/simple"
+        --username gitlab-ci-token
         --password "${CI_JOB_TOKEN}"
