@@ -13,7 +13,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12,<3.15"
 dynamic = ["description"]
 dependencies = [
-    "nn-mcp-types>=1.0",
+    "nn-mcp-types>=1.1",
     "nn-rfc6570-router>=1.0",
     "aiojobs>=1.4",
     "jsonschema>=4.18",
@@ -30,18 +30,16 @@ Repository = "https://gitlab.com/freschu/nn-mcp/nn-mcp-stdio"
 # pinned name is looked up nowhere else -- PyPI included. aiojobs and
 # jsonschema resolve from PyPI as usual.
 #
-# Sources are not inherited from a dependency's metadata: nn-mcp-types asks
-# for `dc_schema>=1.2` and nothing more, so dc_schema has to be pinned here
-# too even though this package never imports it. Every consumer pins the
-# whole transitive closure of our own packages, or the fork's name resolves
-# to the upstream one on PyPI.
+# Sources are not inherited from a dependency's metadata, and they do not
+# apply to transitive dependencies at all -- which is why the schema
+# generator is published as nn-dc-schema rather than relying on a pin here.
+# A name nothing else claims needs no guarding at any depth.
 [[tool.uv.index]]
 name = "nn-mcp"
 url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple"
 explicit = true
 
 [tool.uv.sources]
-dc_schema = { index = "nn-mcp" }
 nn-mcp-types = { index = "nn-mcp" }
 nn-rfc6570-router = { index = "nn-mcp" }
 nn-semver = { index = "nn-mcp" }
