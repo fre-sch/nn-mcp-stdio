@@ -26,23 +26,16 @@ dev = ["nn-semver>=1.0"]
 [project.urls]
 Repository = "https://gitlab.com/freschu/nn-mcp/nn-mcp-stdio"
 
-# `explicit = true` confines this index to the names pinned to it below, and a
-# pinned name is looked up nowhere else -- PyPI included. aiojobs and
-# jsonschema resolve from PyPI as usual.
+# Where our own packages come from. Every name we publish is unique to us --
+# nothing on PyPI claims `nn-dc-schema`, `nn-mcp-types`, `nn-rfc6570-router`
+# or `nn-semver` -- so this is an additional index, not a restricted one.
 #
-# Sources are not inherited from a dependency's metadata, and they do not
-# apply to transitive dependencies at all -- which is why the schema
-# generator is published as nn-dc-schema rather than relying on a pin here.
-# A name nothing else claims needs no guarding at any depth.
+# It must not be `explicit`: uv applies `[tool.uv.sources]` only to a
+# project's direct dependencies, so an explicit index is never searched for
+# a transitive one, and the graph fails to resolve.
 [[tool.uv.index]]
 name = "nn-mcp"
 url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple"
-explicit = true
-
-[tool.uv.sources]
-nn-mcp-types = { index = "nn-mcp" }
-nn-rfc6570-router = { index = "nn-mcp" }
-nn-semver = { index = "nn-mcp" }
 
 [tool.flit.module]
 # Distribution name is nn-mcp-stdio; import name is nn_mcp_stdio under src/.
