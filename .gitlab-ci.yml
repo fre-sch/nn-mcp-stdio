@@ -40,7 +40,7 @@ publish:
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
   script:
-    - uv build
+    - uv build --wheel
     - uv publish
         --publish-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi"
         --check-url "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi/simple"
