@@ -59,9 +59,9 @@ async def test_initialize_handshake():
 async def test_registered_request_handler():
     server = Server(name="demo", version="0.1.0")
 
-    @server.request("ping")
-    async def ping(params):
-        return {"pong": params["value"]}
+    @server.request("echo")
+    async def echo(params):
+        return {"echoed": params["value"]}
 
     out = await run(
         server,
@@ -70,13 +70,13 @@ async def test_registered_request_handler():
                 {
                     "jsonrpc": "2.0",
                     "id": 9,
-                    "method": "ping",
+                    "method": "echo",
                     "params": {"value": 42},
                 }
             )
         ],
     )
-    assert out == [{"jsonrpc": "2.0", "id": 9, "result": {"pong": 42}}]
+    assert out == [{"jsonrpc": "2.0", "id": 9, "result": {"echoed": 42}}]
 
 
 async def test_notification_handler_runs_without_reply():
