@@ -108,7 +108,9 @@ class Context:
         )
 
     async def _emit(self, method, params):
-        notification = jsonrpc.Notification(method=method, params=params)
+        notification = jsonrpc.Notification(
+            method=method, params=params, jsonrpc=jsonrpc.VERSION
+        )
         await self._outbox.put(self._encode(notification))
 
 
