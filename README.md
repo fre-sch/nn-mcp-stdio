@@ -165,6 +165,6 @@ Guides to using each building block effectively:
 - [Resources](docs/resources.md) -- dynamic readers, the fixed literal/file
   registrations, and URI-template resources.
 - [Context](docs/context.md) -- logging and progress back to the client
-  mid-call.
+  mid-call, and blocking work in a thread with `context.to_thread`.
 - [Other handlers](docs/handlers.md) -- registering raw requests and
   notifications with `@server.request` / `@server.notification`.
