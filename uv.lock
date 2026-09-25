@@ -97,7 +97,7 @@ test = [
 requires-dist = [
     { name = "aiojobs", specifier = ">=1.4" },
     { name = "jsonschema", specifier = ">=4.18" },
-    { name = "nn-mcp-types", specifier = ">=2.0" },
+    { name = "nn-mcp-types", specifier = ">=2.1" },
     { name = "nn-rfc6570-router", specifier = ">=1.0" },
     { name = "nn-semver", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
@@ -107,13 +107,13 @@ provides-extras = ["test", "dev"]
 
 [[package]]
 name = "nn-mcp-types"
-version = "2.0.0"
+version = "2.1.0"
 source = { registry = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple" }
 dependencies = [
     { name = "nn-dc-schema" },
 ]
 wheels = [
-    { url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/files/ffe98f6be89ec9852c7bd48baba6497d62725b586e5d2077d7c696fb3e2a403a/nn_mcp_types-2.0.0-py3-none-any.whl", hash = "sha256:ffe98f6be89ec9852c7bd48baba6497d62725b586e5d2077d7c696fb3e2a403a" },
+    { url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/files/3da32c99e94eeedf97c1a15012c682f7b2f24a8f8e42ea4019cf1ad22f83ce1d/nn_mcp_types-2.1.0-py3-none-any.whl", hash = "sha256:3da32c99e94eeedf97c1a15012c682f7b2f24a8f8e42ea4019cf1ad22f83ce1d" },
 ]
 
 [[package]]
