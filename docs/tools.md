@@ -112,6 +112,21 @@ async def _search(
     ...
 ```
 
+## Listing: pages of tools
+
+`tools/list` returns tools in registration order, `page_size` at a time
+(default 100). A page with more to come carries a `nextCursor`; the client sends
+it back as `cursor` for the next page, and the last page has none. A server
+with fewer tools than a page answers in one page, as if unpaginated.
+
+```python
+server = Server(name="demo", version="0.1.0", page_size=50)  # None: one page
+```
+
+The page size is the server's alone -- MCP gives the client no way to ask for
+one. A malformed cursor is answered `INVALID_PARAMS`. The tool set is fixed at
+start-up, so a client paging through it sees every tool exactly once.
+
 ## Return types
 
 The handler's return is mapped to a `CallToolResult`:
