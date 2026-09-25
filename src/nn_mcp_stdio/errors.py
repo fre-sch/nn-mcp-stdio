@@ -1,9 +1,10 @@
-"""Handler-signalled JSON-RPC errors.
+"""JSON-RPC errors, in both directions.
 
 A request handler raises `RequestError` to answer with a specific error code
-(e.g. invalid params) instead of the server's default internal error. Kept in
-its own module so both the server and the tool layer can raise it without an
-import cycle.
+(e.g. invalid params) instead of the server's default internal error. A request
+the server sends that the client answers with an error raises `ClientError` in
+the handler that sent it. Kept in its own module so the server, the context and
+the tool layer can raise them without an import cycle.
 """
 
 from nn_mcp_types import jsonrpc
@@ -18,6 +19,15 @@ class RequestError(Exception):
 
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class ClientError(Exception):
+    """The client answered a request the server sent with a JSON-RPC error."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(f"{message} ({code})")
         self.code = code
         self.message = message
 

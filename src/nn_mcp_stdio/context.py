@@ -2,30 +2,32 @@
 
 A handler that declares a parameter annotated `Context` (any name) is handed one
 by the server. Through it the handler talks back to the client mid-call:
-logging (`notifications/message`) and progress (`notifications/progress`). Those
-notifications are enqueued on the server's single outbound queue -- no second
-writer. That queue belongs to the server's event loop, so a `Context` refuses to
-emit from any other loop or thread rather than race.
+logging (`notifications/message`), progress (`notifications/progress`), and
+asking the user for input (`elicitation/create`). Everything it sends is
+enqueued on the server's single outbound queue -- no second writer. That queue
+belongs to the server's event loop, so a `Context` refuses to emit from any
+other loop or thread rather than race.
 
 Blocking work goes into a thread through `await context.to_thread(func, ...)`,
-which hands `func` a `ContextThreadSafe`: the same logging and progress as plain
-methods safe to call from that thread, plus the request's cancellation.
-
-The server->client *request* back-channel (sampling, elicitation, roots) is a
-later phase.
+which hands `func` a `ContextThreadSafe`: the same methods as plain calls safe
+from that thread, plus the request's cancellation.
 """
 
 import asyncio
+import concurrent.futures
 import threading
 import typing
 
 from nn_mcp_types import common, jsonrpc
+from nn_mcp_types import elicitation as elicitation_types
 from nn_mcp_types import logging as mcp_logging
-from nn_mcp_types.lifecycle import Implementation
+from nn_mcp_types.lifecycle import ClientCapabilities, Implementation
+
+from nn_mcp_stdio import elicitation
 
 
 class Context:
-    """The live connection for the current call: logging and progress.
+    """The live connection for the current call: logging, progress, elicitation.
 
     Handlers do not construct this -- the server injects it into any handler
     that annotates a parameter with `Context`.
@@ -36,15 +38,19 @@ class Context:
         *,
         request_id: int | str | None,
         client: Implementation | None,
+        client_capabilities: ClientCapabilities | None,
         progress_token: int | str | None,
         outbox: typing.Any,
         encode: typing.Callable,
+        request: typing.Callable,
     ) -> None:
         self._request_id = request_id
         self._client = client
+        self._client_capabilities = client_capabilities
         self._progress_token = progress_token
         self._outbox = outbox
         self._encode = encode
+        self._request = request
         self._loop = asyncio.get_running_loop()
 
     @property
@@ -102,6 +108,35 @@ class Context:
         if notification is not None:
             await self._emit(notification)
 
+    async def elicit(
+        self, message: str, form: type
+    ) -> tuple[elicitation_types.ElicitAction, typing.Any]:
+        """Ask the user to fill in `form`, a flat dataclass, and wait.
+
+        Returns `("accept", instance of form)`, `("decline", None)` or
+        `("cancel", None)`. There is no timeout: the wait ends when the user
+        answers or the request is cancelled.
+
+        Raises `TypeError` when `form` is not a flat form (checked first,
+        before anything is sent), `ElicitationNotSupportedError` when the
+        client did not declare form elicitation, `jsonschema.ValidationError`
+        when the answer does not fit `form`, and `ClientError` when the client
+        answers with an error.
+        """
+        self._require_own_loop()
+        schema = elicitation.requested_schema(form)
+        if not elicitation.supports_forms(self._client_capabilities):
+            raise elicitation.ElicitationNotSupportedError(
+                "the client did not declare form elicitation"
+            )
+        result = await self._request(
+            elicitation_types.ELICITATION_CREATE,
+            elicitation_types.ElicitRequestParams(
+                message=message, requested_schema=schema
+            ),
+        )
+        return elicitation.answer(result, form, schema)
+
     async def to_thread(
         self, function: typing.Callable, /, *args, **kwargs
     ) -> typing.Any:
@@ -110,16 +145,17 @@ class Context:
         The parameter of `function` annotated `ContextThreadSafe`, whatever its
         name, receives one for this call. When the request is cancelled, this
         await ends at once; the thread runs on until it checks
-        `cancelled` or calls `raise_if_cancelled()`.
+        `cancelled` or calls `raise_if_cancelled()`, and an `elicit` it waits
+        on raises `asyncio.CancelledError`.
         """
-        cancelled = threading.Event()
+        thread_context = ContextThreadSafe(self)
         name = annotated_parameter(function, ContextThreadSafe)
         if name is not None:
-            kwargs[name] = ContextThreadSafe(self, cancelled)
+            kwargs[name] = thread_context
         try:
             result = await asyncio.to_thread(function, *args, **kwargs)
         except asyncio.CancelledError:
-            cancelled.set()
+            thread_context._cancel()
             raise
         # The thread's messages are callbacks already queued on the loop, but
         # the result can arrive without this task yielding (the future may be
@@ -185,14 +221,17 @@ class ContextThreadSafe:
     """The `Context` of a call, for a function run by `context.to_thread`.
 
     Every method is plain and safe to call from the worker thread: each hands
-    its finished message to the server's event loop. A thread cannot be stopped
-    from outside, so a cancelled request reaches it only where it checks
-    `cancelled` or calls `raise_if_cancelled()`.
+    its work to the server's event loop. A thread cannot be stopped from
+    outside, so a cancelled request reaches it only where it checks
+    `cancelled`, calls `raise_if_cancelled()`, or waits on `elicit`.
     """
 
-    def __init__(self, context: Context, cancelled: threading.Event) -> None:
+    def __init__(self, context: Context) -> None:
         self._context = context
-        self._cancelled = cancelled
+        self._cancelled = threading.Event()
+        # Guards the cancel against an elicit starting at the same moment.
+        self._lock = threading.Lock()
+        self._elicitations = set()
 
     @property
     def request_id(self) -> int | str | None:
@@ -250,6 +289,35 @@ class ContextThreadSafe:
         )
         if notification is not None:
             self._context._emit_threadsafe(notification)
+
+    def elicit(
+        self, message: str, form: type
+    ) -> tuple[elicitation_types.ElicitAction, typing.Any]:
+        """Ask the user to fill in `form`, blocking this thread until answered.
+
+        As `Context.elicit`; a cancelled request raises
+        `asyncio.CancelledError`.
+        """
+        pending = asyncio.run_coroutine_threadsafe(
+            self._context.elicit(message, form), self._context._loop
+        )
+        with self._lock:
+            if self._cancelled.is_set():
+                pending.cancel()
+            self._elicitations.add(pending)
+        try:
+            return pending.result()
+        except concurrent.futures.CancelledError:
+            raise asyncio.CancelledError() from None
+        finally:
+            with self._lock:
+                self._elicitations.discard(pending)
+
+    def _cancel(self):
+        with self._lock:
+            self._cancelled.set()
+            for pending in self._elicitations:
+                pending.cancel()
 
 
 def context_parameter(handler: typing.Callable) -> str | None:

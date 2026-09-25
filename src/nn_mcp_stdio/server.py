@@ -3,11 +3,14 @@
 Pipeline: the read loop parses each line into a validated envelope and
 dispatches it by kind; an aiojobs Scheduler runs handlers concurrently and in
 isolation; handlers enqueue their replies onto an outbound queue that a
-single writer task drains to the transport. Logging goes to stderr.
+single writer task drains to the transport. A request the server sends to the
+client (elicitation) waits on a future the read loop resolves from the client's
+response. Logging goes to stderr.
 """
 
 import asyncio
 import dataclasses
+import itertools
 import json
 import logging
 import pathlib
@@ -33,6 +36,9 @@ log = logging.getLogger("nn_mcp_stdio")
 
 _CANCELLED_VALIDATOR = Draft202012Validator(
     get_schema(common.CancelledNotificationParams)
+)
+_CAPABILITIES_VALIDATOR = Draft202012Validator(
+    get_schema(lifecycle.ClientCapabilities)
 )
 
 
@@ -91,12 +97,18 @@ class Server:
         # endpoints iterate it -- no shadow copy of the registrations.
         self._resource_router = Router()
         self._client = None  # the peer's Implementation, captured at initialize
+        self._client_capabilities = None  # likewise its ClientCapabilities
         self._log_level = None  # last logging/setLevel; filtering deferred
         self._outbox = None  # the outbound queue, live for the run() loop
         # Names of accepted requests whose reply is not yet written. A
         # cancellation discards the name, so the writer drops the reply.
         self._owed = set()
         self._closing = set()  # job.close() tasks, kept referenced until done
+        # Requests the server sends: ids of their own, and a future per request
+        # awaiting the client's answer, resolved by the read loop.
+        self._request_ids = itertools.count(1)
+        self._pending = {}
+        self._input_closed = False  # stdin reached EOF: nobody will answer
         # handler -> its Context parameter name (detected once, then cached)
         self._context_names = {}
         self._request_handlers = {
@@ -265,11 +277,21 @@ class Server:
         client = params.get("clientInfo")
         if client is not None:
             self._client = from_wire(lifecycle.Implementation, client)
+        self._client_capabilities = self._declared_capabilities(params)
         return lifecycle.InitializeResult(
             protocol_version=lifecycle.PROTOCOL_VERSION,
             capabilities=self._effective_capabilities(),
             server_info=self._implementation,
         )
+
+    def _declared_capabilities(self, params):
+        capabilities = params.get("capabilities", {})
+        invalid = best_match(_CAPABILITIES_VALIDATOR.iter_errors(capabilities))
+        if invalid is not None:
+            raise errors.invalid_params(
+                f"invalid capabilities: {invalid.message}"
+            )
+        return from_wire(lifecycle.ClientCapabilities, capabilities)
 
     def _effective_capabilities(self):
         # Handlers can always log through Context, so advertise `logging`;
@@ -348,6 +370,7 @@ class Server:
         transport = transport or StdioTransport()
         outbox = asyncio.Queue()
         self._outbox = outbox  # reachable from Context for the loop's lifetime
+        self._input_closed = False
         writer = asyncio.create_task(self._write_outbox(transport, outbox))
         scheduler = aiojobs.Scheduler(
             limit=self._limit, exception_handler=self._on_job_error
@@ -355,6 +378,7 @@ class Server:
         try:
             await self._read_messages(transport, outbox, scheduler)
         finally:
+            self._abandon_pending_requests()
             await scheduler.wait_and_close()  # let in-flight handlers finish
             await outbox.join()  # flush their replies
             writer.cancel()
@@ -383,8 +407,7 @@ class Server:
         elif isinstance(message, jsonrpc.Notification):
             await self._receive(message, scheduler)
         else:
-            # A response to a server-initiated request -- not handled yet.
-            log.debug("ignoring inbound response: %s", message)
+            self._resolve(message)
 
     async def _accept(self, request, outbox, scheduler):
         name = request_name(request.id)
@@ -455,6 +478,48 @@ class Server:
         self._closing.discard(closing)
         if not closing.cancelled() and closing.exception() is not None:
             log.error("closing a cancelled job failed: %r", closing.exception())
+
+    async def _request(self, method, params):
+        # Send a request to the client and return its result. A cancelled
+        # caller, or EOF, takes the pending entry with it.
+        if self._input_closed:
+            raise asyncio.CancelledError("stdin closed: nobody will answer")
+        request_id = next(self._request_ids)
+        answered = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = answered
+        try:
+            await self._outbox.put(
+                self._encode(
+                    jsonrpc.Request(
+                        method=method,
+                        id=request_id,
+                        params=params,
+                        jsonrpc=jsonrpc.VERSION,
+                    )
+                )
+            )
+            return await answered
+        finally:
+            del self._pending[request_id]
+
+    def _resolve(self, response):
+        answered = self._pending.get(response.id)
+        if answered is None or answered.done():
+            log.warning("ignoring response to no pending request: %s", response)
+            return
+        if isinstance(response, jsonrpc.ErrorResponse):
+            answered.set_exception(
+                errors.ClientError(response.error.code, response.error.message)
+            )
+        else:
+            answered.set_result(response.result)
+
+    def _abandon_pending_requests(self):
+        # At EOF nobody will answer, and no reply can reach the client: the
+        # waiting handlers see CancelledError, as for a cancelled request.
+        self._input_closed = True
+        for answered in self._pending.values():
+            answered.cancel()
 
     async def _reject(self, error, outbox):
         # A malformed response is logged, never answered: replying to a
@@ -532,9 +597,11 @@ class Server:
         return Context(
             request_id=request_id,
             client=self._client,
+            client_capabilities=self._client_capabilities,
             progress_token=token,
             outbox=self._outbox,
             encode=self._encode,
+            request=self._request,
         )
 
     async def _write_outbox(self, transport, outbox):
