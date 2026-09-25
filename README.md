@@ -23,12 +23,41 @@ arguments. No pydantic, no code generation, no config.
 
 ## Install
 
-```sh
-pip install nn-mcp-stdio
+Published to a private GitLab package registry, not to PyPI. The registry
+serves its own packages and forwards every other name to PyPI, so it is the
+only index to configure.
+
+With uv, in the consuming project's `pyproject.toml`:
+
+```toml
+[[tool.uv.index]]
+name = "nn-mcp"
+url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple"
+default = true
 ```
 
-Runtime dependencies: `nn-mcp-types` (MCP dataclasses + schema generation),
-`jsonschema` (validation), and `aiojobs` (the handler scheduler).
+```sh
+uv add nn-mcp-stdio
+```
+
+With pip:
+
+```sh
+pip install --index-url https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple nn-mcp-stdio
+```
+
+The registry needs a token. A group deploy token scoped
+`read_package_registry` is enough, in `~/.netrc`:
+
+```
+machine gitlab.com
+login <deploy token username>
+password <deploy token>
+```
+
+Runtime dependencies: `nn-mcp-types` (MCP dataclasses + schema
+generation), `nn-rfc6570-router` (resource routing), `jsonschema`
+(validation), and `aiojobs` (the handler scheduler).
 
 ## Implementation overview
 
