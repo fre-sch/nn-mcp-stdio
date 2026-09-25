@@ -107,7 +107,8 @@ built into an instance of it.
 default is optional. `date` and `datetime` fields work too -- they are strings
 with a `format`. Anything else -- nested dataclasses, enums, `Literal`,
 `X | None`, a list without `Choices` -- raises `TypeError` at the call, before
-anything is sent. An optional field takes a default of its own type.
+anything is sent. Forms have no null, so an optional field takes a default of
+its own type (`nickname: str = ""`), not `None`.
 
 **What else it raises:**
 

@@ -77,12 +77,16 @@ def requested_schema(form: type) -> dict:
 def check_field(form: type, name: str, field: dict) -> None:
     """Raise `TypeError` unless `field` is a form field MCP allows."""
     where = f"{form.__name__}.{name}"
+    if is_nullable(field):
+        raise TypeError(
+            f"{where} allows None, but forms have no null: make it optional "
+            'with a default of its own type instead, e.g. `= ""` or `= 0`'
+        )
     field_type = field.get("type")
     if not isinstance(field_type, str) or field_type not in _FIELD_KEYWORDS:
         raise TypeError(
             f"{where} is not a form field: fields are str, int, float, bool, "
-            "or a Choices over str or list[str]; an optional field takes a "
-            "default of its own type"
+            "or a Choices over str or list[str]"
         )
     unknown = set(field) - _FIELD_KEYWORDS[field_type]
     if unknown:
@@ -102,6 +106,14 @@ def check_field(form: type, name: str, field: dict) -> None:
             f"{where} is a list but not a multi-select: annotate list[str] "
             "with Choices"
         )
+
+
+def is_nullable(field: dict) -> bool:
+    """Whether `field` is dc_schema's schema of an `X | None` field."""
+    field_type = field.get("type")
+    if isinstance(field_type, list):
+        return "null" in field_type
+    return {"type": "null"} in field.get("anyOf", [])
 
 
 def answer(result: dict, form: type, schema: dict) -> tuple:

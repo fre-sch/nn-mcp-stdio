@@ -154,6 +154,19 @@ class WithOptional:
 
 
 @dataclasses.dataclass
+class WithAnnotatedOptional:
+    nickname: typing.Annotated[str | None, SchemaAnnotation(max_length=10)] = (
+        None
+    )
+
+
+@pytest.mark.parametrize("form", [WithOptional, WithAnnotatedOptional])
+def test_an_optional_none_field_is_rejected_for_having_no_null(form):
+    with pytest.raises(TypeError, match="forms have no null"):
+        requested_schema(form)
+
+
+@dataclasses.dataclass
 class WithPlainList:
     tags: list[str]
 
