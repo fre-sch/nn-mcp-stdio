@@ -1,5 +1,6 @@
 """Context injection: logging, progress, request metadata, and capability."""
 
+import asyncio
 import json
 
 from nn_mcp_stdio import Context, Server
@@ -163,3 +164,51 @@ async def test_set_level_is_acknowledged():
         [request("logging/setLevel", {"level": "warning"}, request_id=3)],
     )
     assert out[0] == {"jsonrpc": "2.0", "id": 3, "result": {}}
+
+
+def threaded_logger(errors):
+    server = Server(name="demo", version="0.1.0")
+
+    def log_from_own_loop(ctx):
+        try:
+            asyncio.run(ctx.info("from a thread"))
+        except RuntimeError as error:
+            errors.append(str(error))
+            raise
+
+    @server.tool()
+    async def threaded(ctx: Context) -> str:
+        await asyncio.to_thread(log_from_own_loop, ctx)
+        return "unreachable"
+
+    @server.tool()
+    async def plain() -> str:
+        return "still serving"
+
+    return server
+
+
+async def test_context_refuses_another_event_loop():
+    errors = []
+    out = await run(
+        threaded_logger(errors),
+        [call("threaded", {}, request_id=1), call("plain", {}, request_id=2)],
+    )
+    assert "outside the event loop it belongs to" in errors[0]
+    # nothing was emitted from the thread -- only the two replies went out.
+    assert [message.get("method") for message in out] == [None, None]
+    replies = {message["id"]: message["result"] for message in out}
+    assert replies[1]["isError"] is True  # the tool reports its failure...
+    # ...and the server keeps serving.
+    assert replies[2]["content"][0]["text"] == "still serving"
+
+
+async def test_context_refuses_another_event_loop_in_debug_mode():
+    # Without the check, debug mode turned the race into a hung server.
+    asyncio.get_running_loop().set_debug(True)
+    inbound = [
+        call("threaded", {}, request_id=1),
+        call("plain", {}, request_id=2),
+    ]
+    out = await asyncio.wait_for(run(threaded_logger([]), inbound), timeout=5)
+    assert sorted(message["id"] for message in out) == [1, 2]
