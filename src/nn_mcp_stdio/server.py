@@ -1,8 +1,8 @@
 """The stdio MCP server: register handler functions, run the transport loop.
 
-Pipeline: one reader parses each line and dispatches by message shape; an
-aiojobs Scheduler runs handlers concurrently
-and in isolation; handlers enqueue their replies onto an outbound queue that a
+Pipeline: the read loop parses each line into a validated envelope and
+dispatches it by kind; an aiojobs Scheduler runs handlers concurrently and in
+isolation; handlers enqueue their replies onto an outbound queue that a
 single writer task drains to the transport. Logging goes to stderr.
 """
 
@@ -14,19 +14,45 @@ import pathlib
 import typing
 
 import aiojobs
+from jsonschema.exceptions import best_match
+from jsonschema.validators import Draft202012Validator
 from nn_rfc6570_router import LiteralRoute, Router, TemplateRoute
 
-from nn_mcp_types import jsonrpc, lifecycle
+from nn_mcp_types import common, jsonrpc, lifecycle
 from nn_mcp_types import logging as mcp_logging
 from nn_mcp_types import resources as resource_types
 from nn_mcp_types import tools as tool_types
+from nn_mcp_types.schema import get_schema
 from nn_mcp_types.wire import from_wire, to_wire
 
-from nn_mcp_stdio import errors, resources, tools
+from nn_mcp_stdio import envelope, errors, resources, tools
 from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
 log = logging.getLogger("nn_mcp_stdio")
+
+_CANCELLED_VALIDATOR = Draft202012Validator(
+    get_schema(common.CancelledNotificationParams)
+)
+
+
+class Reply(typing.NamedTuple):
+    """A reply to an accepted request, written only while it is still owed.
+
+    Every other outbound line -- notifications, rejections of malformed or
+    duplicate requests -- is written unconditionally.
+    """
+
+    request_name: str
+    line: str
+
+
+def request_name(request_id: int | str) -> str:
+    """The name a request goes by: its job's name and its key in the owed set.
+
+    `json.dumps`, not `str`, keeps the ids `7` and `"7"` apart.
+    """
+    return json.dumps(request_id)
 
 
 class Server:
@@ -60,6 +86,10 @@ class Server:
         self._client = None  # the peer's Implementation, captured at initialize
         self._log_level = None  # last logging/setLevel; filtering deferred
         self._outbox = None  # the outbound queue, live for the run() loop
+        # Names of accepted requests whose reply is not yet written. A
+        # cancellation discards the name, so the writer drops the reply.
+        self._owed = set()
+        self._closing = set()  # job.close() tasks, kept referenced until done
         # handler -> its Context parameter name (detected once, then cached)
         self._context_names = {}
         self._request_handlers = {
@@ -324,68 +354,132 @@ class Server:
 
     async def _dispatch(self, line, outbox, scheduler):
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            message = envelope.parse(line)
+        except envelope.ParseError:
             await outbox.put(
                 self._failure(None, jsonrpc.PARSE_ERROR, "parse error")
             )
             return
-        if not isinstance(message, dict):
-            await outbox.put(
-                self._failure(None, jsonrpc.INVALID_REQUEST, "invalid request")
-            )
+        except envelope.InvalidMessage as error:
+            await self._reject(error, outbox)
             return
-        if "method" not in message:
+        if isinstance(message, jsonrpc.Request):
+            await self._accept(message, outbox, scheduler)
+        elif isinstance(message, jsonrpc.Notification):
+            await self._receive(message, scheduler)
+        else:
             # A response to a server-initiated request -- not handled yet.
             log.debug("ignoring inbound response: %s", message)
-            return
-        if "id" in message:
-            await scheduler.spawn(self._answer(message, outbox))
-        else:
-            await scheduler.spawn(self._notify(message))
 
-    async def _answer(self, message, outbox):
-        method = message["method"]
-        handler = self._request_handlers.get(method)
-        if handler is None:
+    async def _accept(self, request, outbox, scheduler):
+        name = request_name(request.id)
+        if name in self._owed:
             await outbox.put(
                 self._failure(
-                    message["id"],
-                    jsonrpc.METHOD_NOT_FOUND,
-                    f"method not found: {method}",
+                    request.id,
+                    jsonrpc.INVALID_REQUEST,
+                    "invalid request: id already in flight",
                 )
             )
             return
-        context = self._make_context(message["id"], message.get("params"))
-        try:
-            result = await self._invoke(handler, message.get("params"), context)
-        except errors.RequestError as error:
-            await outbox.put(
-                self._failure(message["id"], error.code, error.message)
-            )
+        self._owed.add(name)
+        await scheduler.spawn(self._answer(request, outbox), name=name)
+
+    async def _receive(self, notification, scheduler):
+        # A cancellation runs in the read loop rather than as a job: a job
+        # could wait in the scheduler's queue behind the job it cancels.
+        if notification.method == common.CANCELLED:
+            self._cancel(notification.params, scheduler)
             return
-        except Exception:
-            log.exception("request handler %r failed", method)
-            await outbox.put(
-                self._failure(
-                    message["id"], jsonrpc.INTERNAL_ERROR, "internal error"
-                )
-            )
+        await scheduler.spawn(self._notify(notification))
+
+    def _cancel(self, params, scheduler):
+        name = self._cancelled_request_name(params)
+        if name is None:
+            return
+        self._owed.discard(name)
+        job = next((job for job in scheduler if job.get_name() == name), None)
+        if job is not None:  # otherwise unknown or already finished
+            self._close_off_loop(job)
+
+    def _cancelled_request_name(self, params):
+        params = params or {}
+        invalid = best_match(_CANCELLED_VALIDATOR.iter_errors(params))
+        if invalid is not None:
+            log.warning("ignoring malformed cancellation: %s", invalid.message)
+            return None
+        cancelled = from_wire(common.CancelledNotificationParams, params)
+        if cancelled.request_id is None:
+            log.warning("ignoring cancellation without a requestId")
+            return None
+        return request_name(cancelled.request_id)
+
+    def _close_off_loop(self, job):
+        # close() waits for the handler; awaited here it would stall the loop.
+        closing = asyncio.create_task(job.close())
+        self._closing.add(closing)
+        closing.add_done_callback(self._closed)
+
+    def _closed(self, closing):
+        self._closing.discard(closing)
+        if not closing.cancelled() and closing.exception() is not None:
+            log.error("closing a cancelled job failed: %r", closing.exception())
+
+    async def _reject(self, error, outbox):
+        # A malformed response is logged, never answered: replying to a
+        # response could set two peers answering each other's errors.
+        if error.envelope_type in envelope.RESPONSE_TYPES:
+            log.warning("ignoring malformed inbound response: %s", error.reason)
             return
         await outbox.put(
-            self._encode(jsonrpc.Response(id=message["id"], result=result))
+            self._failure(
+                error.request_id,
+                jsonrpc.INVALID_REQUEST,
+                f"invalid request: {error.reason}",
+            )
         )
 
-    async def _notify(self, message):
-        handler = self._notification_handlers.get(message["method"])
+    async def _answer(self, request, outbox):
+        await outbox.put(
+            Reply(request_name(request.id), await self._outcome(request))
+        )
+
+    async def _outcome(self, request):
+        # The encoded reply to an accepted request; a CancelledError passes
+        # through (it is no Exception), so a cancelled request gets none.
+        handler = self._request_handlers.get(request.method)
         if handler is None:
-            log.debug("no handler for notification %r", message["method"])
-            return
-        context = self._make_context(None, message.get("params"))
+            return self._failure(
+                request.id,
+                jsonrpc.METHOD_NOT_FOUND,
+                f"method not found: {request.method}",
+            )
+        context = self._make_context(request.id, request.params)
         try:
-            await self._invoke(handler, message.get("params"), context)
+            result = await self._invoke(handler, request.params, context)
+        except errors.RequestError as error:
+            return self._failure(request.id, error.code, error.message)
         except Exception:
-            log.exception("notification handler %r failed", message["method"])
+            log.exception("request handler %r failed", request.method)
+            return self._failure(
+                request.id, jsonrpc.INTERNAL_ERROR, "internal error"
+            )
+        return self._encode(
+            jsonrpc.Response(
+                id=request.id, result=result, jsonrpc=jsonrpc.VERSION
+            )
+        )
+
+    async def _notify(self, notification):
+        handler = self._notification_handlers.get(notification.method)
+        if handler is None:
+            log.debug("no handler for notification %r", notification.method)
+            return
+        context = self._make_context(None, notification.params)
+        try:
+            await self._invoke(handler, notification.params, context)
+        except Exception:
+            log.exception("notification handler %r failed", notification.method)
 
     async def _invoke(self, handler, params, context):
         # Call the handler with `params`, plus the Context injected under the
@@ -414,11 +508,21 @@ class Server:
 
     async def _write_outbox(self, transport, outbox):
         while True:
-            line = await outbox.get()
+            message = await outbox.get()
             try:
-                await transport.write_line(line)
+                line = self._line_to_write(message)
+                if line is not None:
+                    await transport.write_line(line)
             finally:
                 outbox.task_done()
+
+    def _line_to_write(self, message):
+        if not isinstance(message, Reply):
+            return message
+        if message.request_name not in self._owed:
+            return None  # cancelled before it was written
+        self._owed.discard(message.request_name)
+        return message.line
 
     def _encode(self, envelope):
         return json.dumps(
@@ -428,7 +532,9 @@ class Server:
     def _failure(self, request_id, code, text):
         return self._encode(
             jsonrpc.ErrorResponse(
-                error=jsonrpc.Error(code=code, message=text), id=request_id
+                error=jsonrpc.Error(code=code, message=text),
+                jsonrpc=jsonrpc.VERSION,
+                id=request_id,
             )
         )
 
