@@ -4,12 +4,14 @@ A handler that declares a parameter annotated `Context` (any name) is handed one
 by the server. Through it the handler talks back to the client mid-call:
 logging (`notifications/message`) and progress (`notifications/progress`). Those
 notifications are enqueued on the server's single outbound queue -- no second
-writer.
+writer. That queue belongs to the server's event loop, so a `Context` refuses to
+emit from any other loop or thread rather than race.
 
 The server->client *request* back-channel (sampling, elicitation, roots) is a
 later phase.
 """
 
+import asyncio
 import typing
 
 from nn_mcp_types import common, jsonrpc
@@ -38,6 +40,7 @@ class Context:
         self._progress_token = progress_token
         self._outbox = outbox
         self._encode = encode
+        self._loop = asyncio.get_running_loop()
 
     @property
     def request_id(self) -> int | str | None:
@@ -108,10 +111,25 @@ class Context:
         )
 
     async def _emit(self, method, params):
+        self._require_own_loop()
         notification = jsonrpc.Notification(
             method=method, params=params, jsonrpc=jsonrpc.VERSION
         )
         await self._outbox.put(self._encode(notification))
+
+    def _require_own_loop(self):
+        # The outbound queue is not thread-safe: a put from another loop or
+        # thread races the writer, silently in normal mode.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is self._loop:
+            return
+        raise RuntimeError(
+            "Context used outside the event loop it belongs to -- from another "
+            "thread or event loop; emit from the handler itself instead"
+        )
 
 
 def context_parameter(handler: typing.Callable) -> str | None:
