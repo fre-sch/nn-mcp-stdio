@@ -165,7 +165,21 @@ instead. Correspondingly, a resource whose URI a template also matches shadows
 the template for that one URI (routing is most-specific-wins), so a fixed
 `file:///project/pinned` and a `file:///project/{path}` template coexist.
 
+## Listing: pages of resources and templates
+
+`resources/list` and `resources/templates/list` page exactly as `tools/list`
+does (see [Tools](tools.md#listing-pages-of-tools)): `page_size` at a time,
+default 100, `None` for one page, with a `nextCursor` until the last page.
+Resources come in registration order, templates most-specific-first.
+
+Unlike the tool set, the resource set can change while the server runs --
+`add_resource_*` may be called from a tool. A cursor is then best-effort, like
+an SQL offset: a resource registered while a client pages through the list may
+be skipped or sent twice in that pass. A client that needs a consistent view
+lists again from the start; the `list_changed` notification, not yet sent (see
+below), is how the server will tell it to.
+
 ## Not yet supported
 
-`subscribe`/`unsubscribe`, the `updated`/`list_changed` notifications, and
-pagination of `resources/list` / `resources/templates/list` are a later slice.
+`subscribe`/`unsubscribe` and the `updated`/`list_changed` notifications are a
+later slice.

@@ -1,10 +1,11 @@
-"""Offset pagination: the shared helper, and tools/list paged by it."""
+"""Offset pagination: the shared helper, and the list endpoints paged by it."""
 
 import json
 
 import pytest
 
 from nn_mcp_types import jsonrpc
+from nn_mcp_types import resources as resource_types
 
 from nn_mcp_stdio import Server, errors, pagination
 from nn_mcp_stdio.transport import MemoryTransport
@@ -56,20 +57,24 @@ def server_with_tools(count, **options):
     return server
 
 
-async def list_tools(server, cursors):
+async def list_pages(server, method, cursors):
     requests = []
     for request_id, cursor in enumerate(cursors):
         params = {} if cursor is None else {"cursor": cursor}
         request = {
             "jsonrpc": "2.0",
             "id": request_id,
-            "method": "tools/list",
+            "method": method,
             "params": params,
         }
         requests.append(json.dumps(request))
     transport = MemoryTransport(requests)
     await server.run(transport)
     return [json.loads(line) for line in transport.outbound]
+
+
+async def list_tools(server, cursors):
+    return await list_pages(server, "tools/list", cursors)
 
 
 async def test_tools_list_pages_through_every_tool_once():
@@ -108,3 +113,94 @@ async def test_default_page_size_is_100():
 async def test_malformed_cursor_on_the_wire_is_invalid_params():
     (reply,) = await list_tools(server_with_tools(3), ["nope"])
     assert reply["error"]["code"] == jsonrpc.INVALID_PARAMS
+
+
+def server_with_resources(count, templates, **options):
+    server = Server(name="demo", version="0.1.0", **options)
+    for index in range(count):
+        server.add_resource_from_literal(
+            resource_types.Resource(uri=f"file:///r/{index}", name=f"r{index}"),
+            "contents",
+        )
+    for uri_template in templates:
+        definition = resource_types.ResourceTemplate(
+            uri_template=uri_template, name=uri_template
+        )
+
+        async def reader(**variables) -> str:
+            return "contents"
+
+        server.resource_template(definition)(reader)
+    return server
+
+
+TEMPLATES = ["file:///{path}", "file:///a/{path}", "file:///a/b/{name}"]
+
+
+async def test_resources_list_pages_in_registration_order():
+    server = server_with_resources(5, [], page_size=2)
+    pages = await list_pages(server, "resources/list", [None, "2", "4"])
+    assert [page["result"].get("nextCursor") for page in pages] == [
+        "2",
+        "4",
+        None,
+    ]
+    uris = [
+        resource["uri"]
+        for page in pages
+        for resource in page["result"]["resources"]
+    ]
+    assert uris == [f"file:///r/{index}" for index in range(5)]
+
+
+async def test_templates_list_pages_in_route_table_order():
+    (whole,) = await list_pages(
+        server_with_resources(0, TEMPLATES, page_size=None),
+        "resources/templates/list",
+        [None],
+    )
+    pages = await list_pages(
+        server_with_resources(0, TEMPLATES, page_size=2),
+        "resources/templates/list",
+        [None, "2"],
+    )
+    assert pages[0]["result"]["nextCursor"] == "2"
+    assert "nextCursor" not in pages[1]["result"]
+    paged = [
+        template["uriTemplate"]
+        for page in pages
+        for template in page["result"]["resourceTemplates"]
+    ]
+    unpaged = [
+        template["uriTemplate"]
+        for template in whole["result"]["resourceTemplates"]
+    ]
+    assert paged == unpaged
+    assert sorted(paged) == sorted(TEMPLATES)
+
+
+async def test_resources_and_templates_page_independently():
+    server = server_with_resources(3, TEMPLATES, page_size=2)
+    resources_page, templates_page = await list_pages(
+        server, "resources/list", [None]
+    ) + await list_pages(server, "resources/templates/list", [None])
+    assert len(resources_page["result"]["resources"]) == 2
+    assert len(templates_page["result"]["resourceTemplates"]) == 2
+
+
+@pytest.mark.parametrize(
+    "method", ["resources/list", "resources/templates/list"]
+)
+async def test_malformed_resource_cursor_is_invalid_params(method):
+    (reply,) = await list_pages(
+        server_with_resources(3, TEMPLATES), method, ["nope"]
+    )
+    assert reply["error"]["code"] == jsonrpc.INVALID_PARAMS
+
+
+async def test_fewer_resources_than_a_page_is_one_page():
+    (only,) = await list_pages(
+        server_with_resources(3, []), "resources/list", [None]
+    )
+    assert len(only["result"]["resources"]) == 3
+    assert "nextCursor" not in only["result"]

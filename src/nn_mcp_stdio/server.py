@@ -310,21 +310,27 @@ class Server:
         # Direct resources are the router's literal routes: a `Resource`'s uri is
         # a concrete URI, and a template must carry parameters, so the two
         # discovery surfaces correspond exactly to the two route kinds.
+        page, next_cursor = self._page_of_routes(LiteralRoute, params)
         return resource_types.ListResourcesResult(
-            resources=[
-                route.value.definition
-                for route in self._resource_router
-                if isinstance(route, LiteralRoute)
-            ]
+            resources=page, next_cursor=next_cursor
         )
 
     async def _list_resource_templates(self, params):
+        page, next_cursor = self._page_of_routes(TemplateRoute, params)
         return resource_types.ListResourceTemplatesResult(
-            resource_templates=[
-                route.value.definition
-                for route in self._resource_router
-                if isinstance(route, TemplateRoute)
-            ]
+            resource_templates=page, next_cursor=next_cursor
+        )
+
+    def _page_of_routes(self, route_kind, params):
+        # The route table's order is stable: literal routes in registration
+        # order, templates most-specific-first.
+        definitions = [
+            route.value.definition
+            for route in self._resource_router
+            if isinstance(route, route_kind)
+        ]
+        return pagination.page(
+            definitions, (params or {}).get("cursor"), self._page_size
         )
 
     async def _read_resource(self, params, context: Context):
