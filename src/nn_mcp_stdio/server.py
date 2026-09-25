@@ -1,8 +1,8 @@
 """The stdio MCP server: register handler functions, run the transport loop.
 
-Pipeline: one reader parses each line and dispatches by message shape; an
-aiojobs Scheduler runs handlers concurrently
-and in isolation; handlers enqueue their replies onto an outbound queue that a
+Pipeline: the read loop parses each line into a validated envelope and
+dispatches it by kind; an aiojobs Scheduler runs handlers concurrently and in
+isolation; handlers enqueue their replies onto an outbound queue that a
 single writer task drains to the transport. Logging goes to stderr.
 """
 
@@ -22,7 +22,7 @@ from nn_mcp_types import resources as resource_types
 from nn_mcp_types import tools as tool_types
 from nn_mcp_types.wire import from_wire, to_wire
 
-from nn_mcp_stdio import errors, resources, tools
+from nn_mcp_stdio import envelope, errors, resources, tools
 from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
@@ -324,68 +324,82 @@ class Server:
 
     async def _dispatch(self, line, outbox, scheduler):
         try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
+            message = envelope.parse(line)
+        except envelope.ParseError:
             await outbox.put(
                 self._failure(None, jsonrpc.PARSE_ERROR, "parse error")
             )
             return
-        if not isinstance(message, dict):
-            await outbox.put(
-                self._failure(None, jsonrpc.INVALID_REQUEST, "invalid request")
-            )
+        except envelope.InvalidMessage as error:
+            await self._reject(error, outbox)
             return
-        if "method" not in message:
+        if isinstance(message, jsonrpc.Request):
+            await scheduler.spawn(self._answer(message, outbox))
+        elif isinstance(message, jsonrpc.Notification):
+            await scheduler.spawn(self._notify(message))
+        else:
             # A response to a server-initiated request -- not handled yet.
             log.debug("ignoring inbound response: %s", message)
-            return
-        if "id" in message:
-            await scheduler.spawn(self._answer(message, outbox))
-        else:
-            await scheduler.spawn(self._notify(message))
 
-    async def _answer(self, message, outbox):
-        method = message["method"]
-        handler = self._request_handlers.get(method)
+    async def _reject(self, error, outbox):
+        # A malformed response is logged, never answered: replying to a
+        # response could set two peers answering each other's errors.
+        if error.envelope_type in envelope.RESPONSE_TYPES:
+            log.warning("ignoring malformed inbound response: %s", error.reason)
+            return
+        await outbox.put(
+            self._failure(
+                error.request_id,
+                jsonrpc.INVALID_REQUEST,
+                f"invalid request: {error.reason}",
+            )
+        )
+
+    async def _answer(self, request, outbox):
+        handler = self._request_handlers.get(request.method)
         if handler is None:
             await outbox.put(
                 self._failure(
-                    message["id"],
+                    request.id,
                     jsonrpc.METHOD_NOT_FOUND,
-                    f"method not found: {method}",
+                    f"method not found: {request.method}",
                 )
             )
             return
-        context = self._make_context(message["id"], message.get("params"))
+        context = self._make_context(request.id, request.params)
         try:
-            result = await self._invoke(handler, message.get("params"), context)
+            result = await self._invoke(handler, request.params, context)
         except errors.RequestError as error:
             await outbox.put(
-                self._failure(message["id"], error.code, error.message)
+                self._failure(request.id, error.code, error.message)
             )
             return
         except Exception:
-            log.exception("request handler %r failed", method)
+            log.exception("request handler %r failed", request.method)
             await outbox.put(
                 self._failure(
-                    message["id"], jsonrpc.INTERNAL_ERROR, "internal error"
+                    request.id, jsonrpc.INTERNAL_ERROR, "internal error"
                 )
             )
             return
         await outbox.put(
-            self._encode(jsonrpc.Response(id=message["id"], result=result))
+            self._encode(
+                jsonrpc.Response(
+                    id=request.id, result=result, jsonrpc=jsonrpc.VERSION
+                )
+            )
         )
 
-    async def _notify(self, message):
-        handler = self._notification_handlers.get(message["method"])
+    async def _notify(self, notification):
+        handler = self._notification_handlers.get(notification.method)
         if handler is None:
-            log.debug("no handler for notification %r", message["method"])
+            log.debug("no handler for notification %r", notification.method)
             return
-        context = self._make_context(None, message.get("params"))
+        context = self._make_context(None, notification.params)
         try:
-            await self._invoke(handler, message.get("params"), context)
+            await self._invoke(handler, notification.params, context)
         except Exception:
-            log.exception("notification handler %r failed", message["method"])
+            log.exception("notification handler %r failed", notification.method)
 
     async def _invoke(self, handler, params, context):
         # Call the handler with `params`, plus the Context injected under the
@@ -428,7 +442,9 @@ class Server:
     def _failure(self, request_id, code, text):
         return self._encode(
             jsonrpc.ErrorResponse(
-                error=jsonrpc.Error(code=code, message=text), id=request_id
+                error=jsonrpc.Error(code=code, message=text),
+                jsonrpc=jsonrpc.VERSION,
+                id=request_id,
             )
         )
 
