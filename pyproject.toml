@@ -26,16 +26,15 @@ dev = ["nn-semver>=1.0"]
 [project.urls]
 Repository = "https://gitlab.com/freschu/nn-mcp/nn-mcp-stdio"
 
-# Where our own packages come from. Every name we publish is unique to us --
-# nothing on PyPI claims `nn-dc-schema`, `nn-mcp-types`, `nn-rfc6570-router`
-# or `nn-semver` -- so this is an additional index, not a restricted one.
-#
-# It must not be `explicit`: uv applies `[tool.uv.sources]` only to a
-# project's direct dependencies, so an explicit index is never searched for
-# a transitive one, and the graph fails to resolve.
+# The only index. It serves our own packages and forwards every other name to
+# PyPI, so PyPI is never declared beside it -- no tool can pin a transitive
+# dependency to an index, one index that forwards makes that unnecessary.
+# Not `explicit`, no `[tool.uv.sources]`. See the wiki decision
+# gitlab-package-registry.
 [[tool.uv.index]]
 name = "nn-mcp"
 url = "https://gitlab.com/api/v4/groups/141518299/-/packages/pypi/simple"
+default = true
 
 [tool.flit.module]
 # Distribution name is nn-mcp-stdio; import name is nn_mcp_stdio under src/.
