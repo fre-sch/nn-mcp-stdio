@@ -46,5 +46,8 @@ An unregistered notification is ignored.
 - Handlers must be `async def`.
 - Requests run concurrently and in isolation on the scheduler; each reply is
   enqueued on the single outbound stream.
+- A request the client cancels (`notifications/cancelled`) interrupts its
+  handler at an `await`, like any exception, and gets no reply. There is nothing
+  to write for it.
 - `server.run()` reads until stdin EOF, then drains in-flight handlers and their
   replies before returning.
