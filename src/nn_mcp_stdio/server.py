@@ -397,8 +397,24 @@ class Server:
                 )
             )
             return
+        if request.method == common.PING:
+            await self._answer_ping(request, outbox)
+            return
         self._owed.add(name)
         await scheduler.spawn(self._answer(request, outbox), name=name)
+
+    async def _answer_ping(self, request, outbox):
+        # A liveness check answered from the read loop: queued behind busy
+        # jobs, it would make a healthy server look dead.
+        await outbox.put(
+            self._encode(
+                jsonrpc.Response(
+                    id=request.id,
+                    result=common.EmptyResult(),
+                    jsonrpc=jsonrpc.VERSION,
+                )
+            )
+        )
 
     async def _receive(self, notification, scheduler):
         # A cancellation runs in the read loop rather than as a job: a job

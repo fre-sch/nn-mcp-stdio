@@ -24,8 +24,13 @@ To answer with a JSON-RPC error, raise one from `nn_mcp_stdio.errors`; any other
 exception becomes an `INTERNAL_ERROR` response.
 
 The framework already registers `initialize`, `logging/setLevel`, `tools/list`,
-`tools/call`, `resources/list`, and `resources/read`. Registering the same
-method replaces the built-in -- do so only when you mean to.
+`tools/call`, `resources/list`, `resources/templates/list`, and `resources/read`.
+Registering the same method replaces the built-in -- do so only when you mean
+to.
+
+`ping` is answered by the server itself, straight from the loop that reads
+requests, so a client checking liveness gets an answer even while every handler
+slot is busy. It cannot be replaced.
 
 ## Notifications
 
