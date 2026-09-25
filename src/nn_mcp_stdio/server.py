@@ -25,7 +25,7 @@ from nn_mcp_types import tools as tool_types
 from nn_mcp_types.schema import get_schema
 from nn_mcp_types.wire import from_wire, to_wire
 
-from nn_mcp_stdio import envelope, errors, resources, tools
+from nn_mcp_stdio import envelope, errors, pagination, resources, tools
 from nn_mcp_stdio.context import Context, context_parameter
 from nn_mcp_stdio.transport import StdioTransport, Transport
 
@@ -62,6 +62,9 @@ class Server:
     with `@server.tool` (annotated `async def`s -- `tools/list` and a strictly
     validated `tools/call` are built in), and register any other method with
     `@server.request(method)` or `@server.notification(method)`.
+
+    `limit` bounds how many handlers run at once. `page_size` is how many items
+    a list endpoint returns per page; `None` disables pagination.
     """
 
     def __init__(
@@ -71,12 +74,16 @@ class Server:
         capabilities: lifecycle.ServerCapabilities | None = None,
         *,
         limit: int = 100,
+        page_size: int | None = 100,
     ) -> None:
+        if page_size is not None and page_size < 1:
+            raise ValueError(f"page_size must be positive or None: {page_size}")
         self._implementation = lifecycle.Implementation(
             name=name, version=version
         )
         self._capabilities = capabilities or lifecycle.ServerCapabilities()
         self._limit = limit
+        self._page_size = page_size
         self._tools = {}
         # The route table owns the resource set: direct resources and templates
         # both register here, a read resolves to the most-specific match (so a
@@ -286,9 +293,11 @@ class Server:
         return {}
 
     async def _list_tools(self, params):
-        return tool_types.ListToolsResult(
-            tools=[tool.definition for tool in self._tools.values()]
+        definitions = [tool.definition for tool in self._tools.values()]
+        page, next_cursor = pagination.page(
+            definitions, (params or {}).get("cursor"), self._page_size
         )
+        return tool_types.ListToolsResult(tools=page, next_cursor=next_cursor)
 
     async def _call_tool(self, params, context: Context):
         params = params or {}
